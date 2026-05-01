@@ -1,0 +1,6 @@
+# This directory will contain:
+# - PRODUCT-REQUIREMENTS.md (created in Phase 1)
+# - PRODUCT-ROADMAP.md (created in Phase 1)
+# - TECHNICAL-ARCHITECTURE.md (created in Phase 2)
+#
+# Run ./bootstrap.sh to create these files interactively.

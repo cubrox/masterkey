@@ -1,0 +1,84 @@
+name: Auto Fix
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  auto-fix:
+    name: Auto-fix lint issues
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ github.token }}
+
+      - name: Check for Python project
+        id: check_python
+        run: |
+          if [ -f "pyproject.toml" ]; then
+            echo "is_python=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_python=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install uv
+        if: steps.check_python.outputs.is_python == 'true'
+        uses: astral-sh/setup-uv@v4
+
+      - name: Run ruff fix
+        if: steps.check_python.outputs.is_python == 'true'
+        id: ruff_fix
+        run: |
+          uv run --extra dev ruff check . --fix --exit-zero
+          uv run --extra dev ruff format . --check || uv run --extra dev ruff format .
+
+      - name: Check for Node.js project
+        id: check_node
+        run: |
+          if [ -f "package.json" ]; then
+            echo "is_node=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_node=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node.js
+        if: steps.check_node.outputs.is_node == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        if: steps.check_node.outputs.is_node == 'true'
+        run: npm ci
+
+      - name: Run eslint fix
+        if: steps.check_node.outputs.is_node == 'true'
+        run: npx eslint . --fix --no-error-on-unmatched-pattern || true
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit fixes
+        if: steps.changes.outputs.has_changes == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "style: auto-fix lint issues
+
+          Auto-fixed by auto-fix workflow.
+
+          Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+          git push

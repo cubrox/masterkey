@@ -1,0 +1,13 @@
+{
+  "version": "0.1.0",
+  "installedAt": null,
+  "distribution": "template",
+  "syncDirectories": [
+    ".claude/agents",
+    ".claude/commands",
+    ".claude/hooks",
+    ".claude/skills",
+    "scripts",
+    "starters"
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  // GitHub Codespace devcontainer — recommended setup path for workshops.
+  //
+  // Eliminates Windows shell incompatibility, tool-version drift, env-var
+  // propagation gotchas, and stale-PAT precedence traps. See #95.
+  //
+  // The container image holds the canonical workshop environment: every
+  // attendee gets identical Linux, identical tool versions, identical
+  // shell. The manual `bash scripts/setup-solo-mode.sh` flow remains
+  // first-class for users who can't or won't use Codespaces.
+  //
+  // Cost note: 2-core machine × 8 attendees × 2 days ≈ $15-25 of compute
+  // per cohort. See docs/PLATFORM-GUIDE.md "Codespace cost estimate" for
+  // up-to-date figures.
+  "name": "agile-flow-gcp",
+
+  // Lean Ubuntu base — features below add Python / Node / gh / gcloud.
+  // Pinned to noble (24.04 LTS) so the underlying OS doesn't drift across
+  // cohorts. Bumping is a deliberate decision, not an automatic one.
+  "image": "mcr.microsoft.com/devcontainers/base:noble",
+
+  // Tool versions match what the project expects (see CLAUDE.md "Project
+  // Information"). Pinning each feature to a specific version keeps
+  // workshop environments reproducible across cohorts.
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest"
+    },
+    // gcloud is not in devcontainers/features (first-party) or
+    // devcontainers-contrib/features. dhoeric/features/google-cloud-cli
+    // is the established community feature for it. Trust trade-off: one
+    // additional publisher hop. Maintained, widely used, no GKE plugin
+    // by default (we don't need it).
+    "ghcr.io/dhoeric/features/google-cloud-cli:1": {
+      "version": "latest"
+    },
+    // uv (Python package manager) — needed by `uv sync` in postCreate
+    "ghcr.io/va-h/devcontainers-features/uv:1": {
+      "version": "latest"
+    }
+  },
+
+  // Solo mode is the default for Codespaces — no bot accounts, single
+  // personal account plays all roles. Set in containerEnv (not
+  // remoteEnv) so it propagates into ALL subprocesses including agent
+  // tool calls. Avoids the env-var-propagation gotcha called out in
+  // #95 and downstream UPSTREAM-HANDOFF Issue #4.
+  "containerEnv": {
+    "AGILE_FLOW_SOLO_MODE": "true"
+  },
+
+  // Run the solo-mode bootstrap automatically. Codespaces auto-injects
+  // GITHUB_TOKEN, so gh is already authenticated; setup-solo-mode.sh
+  // does the rest (hooks path, scope check, admin verification). uv sync
+  // installs Python deps so `uv run pytest` works on first command.
+  "postCreateCommand": "bash scripts/setup-solo-mode.sh && uv sync --extra dev",
+
+  // FastAPI dev server.
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {
+      "label": "FastAPI",
+      "onAutoForward": "notify"
+    }
+  },
+
+  // Cap default machine type at 2-core to keep workshop costs predictable.
+  // Attendees can manually upgrade in their Codespace settings if a
+  // particular task needs more compute (rare for this workshop's scope).
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "4gb"
+  }
+}

@@ -1,0 +1,124 @@
+name: Preview Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  cleanup:
+    name: Cleanup Preview Resources
+    if: github.repository != 'vibeacademy/agile-flow-gcp'
+    runs-on: ubuntu-latest
+
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+      SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE || 'agile-flow-app' }}
+      PR_NUMBER: ${{ github.event.number }}
+
+    steps:
+      - name: Check for required secrets
+        id: check_secrets
+        # GitHub Actions hard-rejects `secrets.*` in `if:` expressions, so
+        # we promote presence checks into outputs that downstream `if:`
+        # gates can read. `gcp_configured` gates GCP cleanup; `auth_method`
+        # selects between WIF and SA key; `neon_configured` gates the
+        # Neon branch deletion.
+        run: |
+          if [ -n "${{ secrets.GCP_PROJECT_ID }}" ]; then
+            echo "gcp_configured=true" >> "$GITHUB_OUTPUT"
+            if [ -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ]; then
+              echo "auth_method=wif" >> "$GITHUB_OUTPUT"
+            elif [ -n "${{ secrets.GCP_SA_KEY }}" ]; then
+              echo "auth_method=sa-key" >> "$GITHUB_OUTPUT"
+            else
+              echo "auth_method=none" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "gcp_configured=false" >> "$GITHUB_OUTPUT"
+            echo "auth_method=none" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "${{ secrets.NEON_API_KEY }}" ]; then
+            echo "neon_configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "neon_configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Neon: delete the PR branch database ───────────────────────────
+
+      - name: Delete Neon branch
+        if: steps.check_secrets.outputs.neon_configured == 'true'
+        uses: neondatabase/delete-branch-action@v3
+        continue-on-error: true
+        with:
+          project_id: ${{ secrets.NEON_PROJECT_ID }}
+          branch: pr-${{ env.PR_NUMBER }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+
+      # ── GCP: remove the Cloud Run revision tag ────────────────────────
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        if: steps.check_secrets.outputs.auth_method == 'wif'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Authenticate to Google Cloud (Service Account Key fallback)
+        if: steps.check_secrets.outputs.auth_method == 'sa-key'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        if: steps.check_secrets.outputs.gcp_configured == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+
+      # Removing a revision tag stops routing traffic to the preview
+      # revision. The revision itself stays in the revision history but
+      # receives no traffic and incurs no compute cost on scale-to-zero.
+      #
+      # We don't delete the underlying revision because Cloud Run charges
+      # nothing for inactive revisions and keeping them aids forensics.
+      - name: Remove Cloud Run revision tag
+        if: steps.check_secrets.outputs.gcp_configured == 'true'
+        continue-on-error: true
+        run: |
+          TAG="pr-${{ env.PR_NUMBER }}"
+          echo "Removing revision tag: $TAG"
+
+          # Check the tag exists before attempting removal (idempotent)
+          EXISTING=$(gcloud run services describe "${{ env.SERVICE_NAME }}" \
+            --region="${{ env.GCP_REGION }}" \
+            --format="value(status.traffic[?tag='$TAG'].tag)" 2>/dev/null || echo "")
+
+          if [ -z "$EXISTING" ]; then
+            echo "Tag $TAG not found on ${{ env.SERVICE_NAME }} — nothing to clean up."
+            exit 0
+          fi
+
+          gcloud run services update-traffic "${{ env.SERVICE_NAME }}" \
+            --region="${{ env.GCP_REGION }}" \
+            --remove-tags="$TAG" \
+            --quiet
+
+          echo "Removed tag $TAG"
+
+      - name: Log cleanup
+        run: |
+          echo "========================================"
+          echo "  Preview Cleanup"
+          echo "========================================"
+          echo ""
+          echo "PR:        #${{ env.PR_NUMBER }}"
+          echo "Branch:    ${{ github.head_ref }}"
+          echo "Merged:    ${{ github.event.pull_request.merged }}"
+          echo ""
+          echo "Resources removed (if present):"
+          echo "  - Neon branch:            pr-${{ env.PR_NUMBER }}"
+          echo "  - Cloud Run revision tag: pr-${{ env.PR_NUMBER }}"
+          echo "========================================"

@@ -1,0 +1,4 @@
+handle,github_user,email,cohort,neon_branch,github_full_repo
+alice,alice-gh,alice@acme.com,2026-05,alice,acme/agile-flow-alice
+bob,bob-gh,bob@acme.com,2026-05,bob,acme/widget-shop
+carol,carol-gh,carol@example.com,2026-05,,

@@ -1,0 +1,7 @@
+<ul id="todo-list" class="todo-list">
+  {% for todo in todos %}
+    {% include "_fragments/todo_item.html" %}
+  {% else %}
+    <li class="todo-empty"><em>No todos yet. Add one above.</em></li>
+  {% endfor %}
+</ul>

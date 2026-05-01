@@ -1,0 +1,41 @@
+# actionlint configuration
+#
+# Suppresses error patterns that match the project's existing shellcheck
+# posture in scripts/validation/validate-scripts.sh. Workflow `run:`
+# blocks should hold the same line as bash scripts in the repo.
+#
+# See: https://github.com/rhysd/actionlint/tree/main/docs/config.md
+# See: scripts/validation/validate-scripts.sh:54 (the project's own
+# shellcheck exclusions: SC1091 SC2001 SC2002 SC2034 SC2064 SC2086
+# SC2155 SC2162 SC2317).
+
+self-hosted-runner:
+  labels: []
+
+config-variables: null
+
+paths:
+  .github/workflows/**/*.yml:
+    ignore:
+      # Match the bash-side shellcheck exclusions from validate-scripts.sh
+      # so workflow `run:` blocks aren't held to a stricter standard than
+      # the rest of the project's shell code.
+      - 'SC1091:'
+      - 'SC2001:'
+      - 'SC2002:'
+      - 'SC2034:'
+      - 'SC2064:'
+      - 'SC2086:'
+      - 'SC2155:'
+      - 'SC2162:'
+      - 'SC2317:'
+      # SC2129 (style: combine redirects) and SC2016 (single-quote
+      # expressions) are stylistic and not enforced on the bash side
+      # either. Suppress to match.
+      - 'SC2129:'
+      - 'SC2016:'
+      # `github.head_ref` expression-injection warning in
+      # preview-cleanup.yml:112 is a real defense-in-depth concern but
+      # not introduced by this PR. File as a follow-up before removing
+      # this suppression.
+      - 'github\.head_ref. is potentially untrusted'

@@ -1,0 +1,54 @@
+# Python build artifacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+.venv
+
+# Source control
+.git
+.gitignore
+.gitattributes
+
+# IDE & OS
+.vscode
+.idea
+.DS_Store
+*.swp
+
+# Env files (NEVER copy secrets into images)
+.env
+.env.*
+!.env.example
+
+# Tests & dev-only files (tests run in CI, not in the container)
+tests
+
+# Docs & framework files (not needed at runtime)
+docs
+reports
+CHANGELOG.md
+CLAUDE.md
+README.md
+UPSTREAM.md
+VERSIONING.md
+LICENSE
+.claude
+.agile-flow-version
+.grok
+
+# CI
+.github
+scripts
+
+# Alternate starter references
+starters
+
+# Misc
+*.log

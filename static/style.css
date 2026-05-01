@@ -1,0 +1,47 @@
+/* Workshop-specific overrides on top of Pico.css defaults.
+   Keep this small — Pico.css handles 95% of the styling. */
+
+.todo-list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.todo-item:last-child {
+  border-bottom: none;
+}
+
+.todo-item label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  margin: 0;
+  cursor: pointer;
+}
+
+.todo-done span {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.todo-delete {
+  padding: 0.125rem 0.5rem;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.todo-empty {
+  padding: 1rem 0.75rem;
+  color: var(--pico-muted-color);
+  text-align: center;
+}

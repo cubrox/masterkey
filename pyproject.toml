@@ -1,0 +1,44 @@
+[project]
+name = "agile-flow-gcp"
+version = "0.1.0"
+description = "Agile Flow GCP Edition — FastAPI + Jinja2 + HTMX starter for Cloud Run + Neon"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "sqlmodel>=0.0.22",
+    "alembic>=1.13",
+    "psycopg[binary,pool]>=3.2",
+    "pydantic-settings>=2.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "httpx>=0.28",
+    "ruff>=0.8",
+    "mypy>=1.11",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/versions/*.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = true

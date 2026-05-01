@@ -1,0 +1,29 @@
+[project]
+name = "agile-flow-starter"
+version = "0.9.0"
+description = "Minimal FastAPI starter app for Agile Flow workshops"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "sentry-sdk[fastapi]>=2.19",
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "httpx>=0.28",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

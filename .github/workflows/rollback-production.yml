@@ -1,0 +1,161 @@
+name: Rollback Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: 'Cloud Run revision to rollback to (leave empty for previous ready revision)'
+        required: false
+        type: string
+      reason:
+        description: 'Reason for rollback'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  rollback:
+    name: Rollback to previous Cloud Run revision
+    runs-on: ubuntu-latest
+
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+      SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE || 'agile-flow-app' }}
+
+    steps:
+      - name: Check for required secrets
+        id: check_secrets
+        # GitHub Actions hard-rejects `secrets.*` in `if:` expressions, so
+        # we promote auth-method selection into an output. Rollback hard-
+        # requires GCP_PROJECT_ID; the step exits 1 if it is missing.
+        run: |
+          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then
+            echo "GCP_PROJECT_ID is not configured. Cannot rollback."
+            exit 1
+          fi
+          if [ -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ]; then
+            echo "auth_method=wif" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "auth_method=sa-key" >> "$GITHUB_OUTPUT"
+          else
+            echo "Neither GCP_WORKLOAD_IDENTITY_PROVIDER nor GCP_SA_KEY configured. Cannot rollback."
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        if: steps.check_secrets.outputs.auth_method == 'wif'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Authenticate to Google Cloud (Service Account Key fallback)
+        if: steps.check_secrets.outputs.auth_method == 'sa-key'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Find rollback target revision
+        id: target
+        run: |
+          INPUT_REVISION="${{ inputs.revision }}"
+
+          if [ -n "$INPUT_REVISION" ]; then
+            TARGET="$INPUT_REVISION"
+            echo "Rolling back to specified revision: $TARGET"
+          else
+            # Find the revision before the current one.
+            CURRENT=$(gcloud run services describe "$SERVICE_NAME" \
+              --region="$GCP_REGION" \
+              --format='value(status.latestReadyRevisionName)')
+            echo "Current revision: $CURRENT"
+
+            # List revisions in reverse chronological order, skipping the current one.
+            TARGET=$(gcloud run revisions list \
+              --service="$SERVICE_NAME" \
+              --region="$GCP_REGION" \
+              --format='value(metadata.name)' \
+              --limit=10 \
+              --sort-by='~metadata.creationTimestamp' \
+              | grep -v "^${CURRENT}$" \
+              | head -1)
+
+            if [ -z "$TARGET" ]; then
+              echo "No previous revision found to rollback to."
+              exit 1
+            fi
+
+            echo "Rolling back to previous revision: $TARGET"
+          fi
+
+          echo "revision=$TARGET" >> "$GITHUB_OUTPUT"
+
+      - name: Route traffic to rollback target
+        run: |
+          TARGET="${{ steps.target.outputs.revision }}"
+          echo "Routing 100% traffic to $TARGET..."
+
+          gcloud run services update-traffic "$SERVICE_NAME" \
+            --region="$GCP_REGION" \
+            --to-revisions="${TARGET}=100" \
+            --quiet
+
+          echo "Rollback complete."
+
+      - name: Verify service is serving from target
+        run: |
+          TARGET="${{ steps.target.outputs.revision }}"
+
+          ACTUAL=$(gcloud run services describe "$SERVICE_NAME" \
+            --region="$GCP_REGION" \
+            --format='value(status.traffic[?percent==`100`].revisionName)')
+
+          if [ "$ACTUAL" = "$TARGET" ]; then
+            echo "Verified: traffic is routed to $TARGET"
+          else
+            echo "WARNING: expected $TARGET, got $ACTUAL"
+            exit 1
+          fi
+
+      - name: Smoke test
+        run: |
+          URL=$(gcloud run services describe "$SERVICE_NAME" \
+            --region="$GCP_REGION" \
+            --format='value(status.url)')
+
+          echo "Smoke testing: $URL/api/health"
+
+          for ATTEMPT in $(seq 1 5); do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$URL/api/health" || echo "000")
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "Rolled-back service is healthy."
+              exit 0
+            fi
+            echo "Attempt $ATTEMPT: HTTP $HTTP_STATUS, retrying in 5s..."
+            sleep 5
+          done
+
+          echo "Rolled-back service is NOT healthy. Manual intervention required."
+          exit 1
+
+      - name: Log rollback event
+        if: always()
+        run: |
+          echo "========================================"
+          echo "ROLLBACK EVENT LOG"
+          echo "========================================"
+          echo "Timestamp:    $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          echo "Target:       ${{ steps.target.outputs.revision }}"
+          echo "Service:      ${{ env.SERVICE_NAME }}"
+          echo "Region:       ${{ env.GCP_REGION }}"
+          echo "Reason:       ${{ inputs.reason }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "========================================"

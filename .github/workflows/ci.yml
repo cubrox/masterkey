@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # REQUIRED: preview-deploy.yml calls this workflow via
+  # `uses: ./.github/workflows/ci.yml`. Without workflow_call here,
+  # GitHub silently shows "0 jobs" with no useful error.
+  # See docs/PATTERN-LIBRARY.md #16
+  workflow_call:
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint Markdown files
+        uses: DavidAnson/markdownlint-cli2-action@v18
+        with:
+          globs: |
+            **/*.md
+            !node_modules
+            !starters/**
+          config: '.markdownlint.json'
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate JSON files
+        run: ./scripts/validation/validate-json.sh
+
+      - name: Validate version parity
+        run: ./scripts/validation/validate-version-parity.sh
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Validate shell scripts
+        run: ./scripts/validation/validate-scripts.sh
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate command files
+        run: ./scripts/validation/validate-commands.sh
+
+      - name: Validate agent files
+        run: ./scripts/validation/validate-agents.sh
+
+  lint-agent-policies:
+    name: lint-agent-policies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate agent policies
+        run: ./scripts/validation/validate-agent-policies.sh
+
+      - name: Lint agent policies for prohibited instructions
+        run: ./scripts/lint-agent-policies.sh
+
+      - name: Verify agent restrictions (protocol and docs)
+        run: ./scripts/verify-agent-restrictions.sh --test protocol && ./scripts/verify-agent-restrictions.sh --test docs
+
+  actionlint:
+    # Static checker for GitHub Actions YAML. Catches workflow-level
+    # bugs that bash shellcheck and project tests can't reach:
+    #   - `secrets.*` referenced inside `if:` expressions (#29 class)
+    #   - Unknown action inputs e.g. dropped `service_account` arg
+    #     (#32 class)
+    #   - Malformed expressions, undefined contexts
+    #
+    # Filed as #37 after three workflow YAML bugs reached `main` in
+    # earlier sessions (#27, #29, #32). actionlint validates workflow
+    # structure and recognized action inputs; it does NOT shellcheck
+    # the contents of free-form strings (e.g. gcloud `flags:` values).
+    # Bugs in that class — like #76 (`--traffic=latest=100` rejected
+    # by gcloud at runtime) — need a separate guard, e.g. an end-to-end
+    # deploy in CI or a curated allowlist of known gcloud flags.
+    #
+    # Job runs on every PR (not path-filtered): actionlint is <5s and
+    # the overhead vs. introducing a paths-filter dependency is
+    # negligible. Suppression rules in .github/actionlint.yaml keep
+    # the lint posture aligned with scripts/validation/validate-scripts.sh.
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install actionlint
+        id: get_actionlint
+        # Pin to a specific version so workflow lint behavior doesn't
+        # change silently across runs. The download-and-exec pattern
+        # is the rhysd-recommended integration; avoids depending on a
+        # third-party action wrapper.
+        run: |
+          bash <(curl -fsS https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          echo "executable=${{ github.workspace }}/actionlint" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      - name: Run actionlint
+        run: ${{ steps.get_actionlint.outputs.executable }} -color -config-file .github/actionlint.yaml
+        shell: bash
+
+  python:
+    name: python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Python project
+        id: check_python
+        run: |
+          if [ -f "pyproject.toml" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No pyproject.toml found -- skipping Python checks."
+          fi
+
+      - name: Install uv
+        if: steps.check_python.outputs.skip != 'true'
+        uses: astral-sh/setup-uv@v4
+
+      - name: Lint with ruff
+        if: steps.check_python.outputs.skip != 'true'
+        run: uv run --extra dev ruff check .
+
+      - name: Type check with mypy
+        if: steps.check_python.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          uv run --extra dev pip install mypy 2>/dev/null || true
+          uv run --extra dev mypy . --ignore-missing-imports || echo "mypy not configured -- skipping"
+
+      - name: Run tests with coverage
+        if: steps.check_python.outputs.skip != 'true'
+        run: |
+          uv run --extra dev pytest --tb=short -q --cov --cov-report=term-missing --cov-fail-under=${COVERAGE_THRESHOLD:-80}
+
+      - name: Run BDD tests
+        # Legitimate opt-out (per #52 silent-skip audit): hashFiles('') == '' when
+        # the fork has no `features/*.feature` files. Many forks of this template
+        # don't ship BDD tests — the empty result means "no BDD features in this
+        # repo," not "feature collection failed." Keep as a skip-when-absent
+        # gate, NOT a silent-failure cascade.
+        if: steps.check_python.outputs.skip != 'true' && hashFiles('features/*.feature') != ''
+        run: uv run --extra dev pytest --tb=short -q features/
+
+  node:
+    name: node
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Node.js project
+        id: check_node
+        run: |
+          if [ -f "package.json" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No package.json found -- skipping Node.js checks."
+          fi
+
+      - name: Setup Node.js
+        if: steps.check_node.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        if: steps.check_node.outputs.skip != 'true'
+        run: npm ci
+
+      - name: Lint
+        if: steps.check_node.outputs.skip != 'true'
+        run: npm run lint
+
+      - name: Type check
+        if: steps.check_node.outputs.skip != 'true'
+        run: npm run typecheck
+
+      - name: Test
+        if: steps.check_node.outputs.skip != 'true'
+        run: npm test
+
+      - name: Build
+        if: steps.check_node.outputs.skip != 'true'
+        run: npm run build

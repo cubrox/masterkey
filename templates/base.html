@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Agile Flow GCP{% endblock %}</title>
+
+  <!-- Pico.css: classless CSS framework. Styles plain HTML nicely with no effort.
+       Replace with your own CSS or a utility framework when you outgrow it. -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+
+  <!-- HTMX 2.x core. Add extensions from htmx.org/extensions as needed. -->
+  <script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js"></script>
+
+  <!-- Workshop-specific overrides -->
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

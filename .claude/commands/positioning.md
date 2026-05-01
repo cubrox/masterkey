@@ -1,0 +1,247 @@
+---
+description: "Product positioning analysis"
+---
+
+## Positioning Analysis
+
+Conduct a structured positioning analysis using April Dunford's "Obviously Awesome" framework. Output feeds into `/bootstrap-product` to produce a differentiated, evidence-based PRD.
+
+## Instructions for the Agent
+
+**IMPORTANT: Follow this exact sequence. Ask questions ONE AT A TIME and wait for responses before proceeding.**
+
+### Pre-Check: Prior Research
+
+Before asking questions, check for these files:
+- `docs/MARKET-RESEARCH.md`
+- `docs/JOBS-TO-BE-DONE.md`
+
+**If market research exists:**
+1. Read the file
+2. Pre-fill competitive alternatives from the Competitor Analysis table
+3. Pre-fill customer characteristics from Target Audience Insights
+4. Tell the user what was found and what will be pre-filled
+
+**If JTBD analysis exists:**
+1. Read the file
+2. Pre-fill customer needs from the Core Job Statement and Pain Points
+3. Pre-fill value themes from Underserved Needs
+4. Tell the user what was found and what will be pre-filled
+
+**If neither exists:**
+- Proceed with all questions. Mention that running `/research` and `/jtbd` first would enrich this analysis, but they are not required.
+
+---
+
+## Questionnaire
+
+**Question 1** *(skip if market research provides product context)*
+```
+What product are you positioning?
+
+Describe it in one sentence.
+
+Example: "A fitness studio management platform for boutique gym owners"
+```
+
+**Question 2**
+```
+What are the competitive alternatives your customers would use if your product didn't exist?
+
+Include ALL alternatives — not just software competitors:
+- Direct software competitors
+- Manual processes (spreadsheets, pen-and-paper)
+- Hiring someone to do it
+- Using a general-purpose tool (e.g., Excel, Notion)
+- Doing nothing / living with the problem
+
+List 3-5 alternatives:
+```
+
+If market research is available, show the pre-filled competitors and ask: "Here are alternatives from your market research. Add, remove, or confirm:"
+
+**Question 3**
+```
+What unique attributes does your product have that alternatives lack?
+
+These should be concrete, defensible capabilities — not aspirational claims.
+
+Example:
+- "AI-powered auto-fill for cancelled class slots"
+- "Real-time sync with Google Calendar and MindBody"
+- "Free tier with no per-seat pricing"
+
+Your unique attributes (list 2-4):
+```
+
+**Question 4**
+```
+Who is the best-fit customer for your product?
+
+This is NOT "everyone who could use it" — it's the customer who would be most disappointed if your product disappeared.
+
+Describe them with:
+- Role or title
+- Company size or context
+- Key characteristic that makes them your best fit
+
+Example: "Solo boutique gym owner with 1-3 locations who currently manages bookings manually"
+
+Best-fit customer:
+```
+
+If JTBD analysis is available, show the Core Job Statement and ask: "Based on your JTBD analysis, does this customer profile fit? Confirm or adjust:"
+
+**Question 5**
+```
+What market category do you want to compete in?
+
+1. Create a new category (risky but high reward)
+2. Win a subsegment of an existing category
+3. Compete head-on in an established category
+4. Not sure yet
+
+Enter a number (1-4) or describe your category:
+```
+
+If they choose 1-3, ask a follow-up:
+```
+What would you call this category in 3-5 words?
+
+Example: "Boutique fitness management" or "Developer migration testing"
+```
+
+---
+
+## After Collecting All Responses
+
+### Phase 1: Build Positioning Statement
+
+Construct the positioning statement using the Dunford framework:
+
+```
+For [best-fit customer from Q4]
+who [core need — from JTBD or inferred from Q2-Q3],
+[product name] is a [market category from Q5]
+that [key benefit derived from Q3].
+Unlike [primary alternative from Q2],
+[product name] [key differentiator from Q3].
+```
+
+### Phase 2: Optional Web Validation
+
+If `WebSearch` is available, validate positioning claims:
+
+**Validation searches (parallel):**
+- `"{market category} market {current year}"` — verify the category exists or is emerging
+- `"{primary competitor} positioning"` — understand competitor positioning
+- `"{unique attribute} {industry}"` — check if the claimed differentiator is truly unique
+
+**IMPORTANT:** If web results reveal that a claimed differentiator is not unique, flag it to the user. Suggest ways to sharpen the positioning.
+
+**If `WebSearch` is unavailable:** Skip web validation. Note "Web validation not performed" in the output.
+
+### Phase 3: Derive Messaging
+
+From the positioning elements, derive:
+1. **Value Themes** — 2-3 themes that connect attributes to customer outcomes
+2. **Messaging Pillars** — specific proof points for each theme
+
+### Phase 4: Write Output
+
+Present a summary to the user and confirm before writing the file.
+
+Write the output to **`docs/POSITIONING-ANALYSIS.md`** using the template below.
+
+---
+
+## Output Template
+
+```markdown
+# Positioning Analysis
+
+> Generated by `/positioning` on {date}
+> Framework: April Dunford's "Obviously Awesome"
+
+## Positioning Statement
+
+> For {best-fit customer}
+> who {core need},
+> {product name} is a {market category}
+> that {key benefit}.
+> Unlike {primary alternative},
+> {product name} {key differentiator}.
+
+## Competitive Alternatives
+
+| Alternative | Type | What It Does Well | Where It Falls Short |
+|------------|------|------------------|---------------------|
+| {alternative} | Direct / Indirect / Manual / Status Quo | {strengths} | {gaps your product fills} |
+
+## Unique Attributes
+
+| Attribute | Why It Matters | Proof Point |
+|-----------|---------------|-------------|
+| {attribute from Q3} | {benefit to customer} | {evidence or mechanism} |
+
+## Value Themes
+
+{2-3 themes that connect your attributes to customer outcomes.}
+
+### Theme 1: {theme name}
+- **Attribute**: {which unique attribute}
+- **Benefit**: {what the customer gets}
+- **Proof**: {how you deliver it}
+
+### Theme 2: {theme name}
+- **Attribute**: {which unique attribute}
+- **Benefit**: {what the customer gets}
+- **Proof**: {how you deliver it}
+
+## Best-Fit Customer
+
+- **Description**: {from Q4}
+- **Core Need**: {from JTBD or inferred}
+- **Trigger Event**: {when they start looking for a solution}
+- **Must-Have Requirement**: {the one thing they won't compromise on}
+
+## Market Category
+
+- **Category**: {from Q5}
+- **Strategy**: New category / Subsegment / Head-on
+- **Category Trend**: {is this category growing, stable, or declining — from research if available}
+
+## Messaging Pillars
+
+| Pillar | Headline | Supporting Point | Evidence |
+|--------|----------|-----------------|----------|
+| 1 | {short headline} | {expanded message} | {proof} |
+| 2 | {short headline} | {expanded message} | {proof} |
+| 3 | {short headline} | {expanded message} | {proof} |
+
+## Sources
+
+{List any URLs referenced. If no web research was performed, write "No web sources — analysis based on user interview."}
+```
+
+---
+
+## What Happens Next
+
+After completing positioning analysis:
+1. Run `/bootstrap-product` to create the PRD — it will read all three research artifacts (market research, JTBD, positioning) and pre-populate 10 of 25 questions automatically
+2. Your positioning statement will appear directly in the PRD's value proposition
+
+### Output Format
+
+End your output with a Result Block:
+
+```
+---
+
+**Result:** Positioning analysis complete
+Category: Boutique fitness management
+Strategy: Win subsegment
+Alternatives evaluated: 4
+Document: docs/POSITIONING-ANALYSIS.md
+```

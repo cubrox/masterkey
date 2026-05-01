@@ -1,0 +1,62 @@
+# FRAMEWORK:START
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+.idea/
+.vscode/
+*.sublime-*
+
+# Claude Code local settings (contains user-specific permissions)
+.claude/settings.local.json
+
+# Environment and secrets
+.env
+.env.*
+*.key
+*.pem
+credentials.json
+secrets.json
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build outputs (if applicable)
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Logs
+*.log
+logs/
+# FRAMEWORK:END
+
+# Project-specific ignores (add below this line)
+
+# Workshop roster — input + generated output. Contains participant emails;
+# never commit. Use scripts/roster.example.csv as the format reference.
+roster.csv
+roster-output.csv

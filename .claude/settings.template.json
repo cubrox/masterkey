@@ -1,0 +1,62 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(node:*)",
+      "Bash(ls:*)",
+      "Bash(pwd:*)",
+      "Bash(cat:*)",
+      "Bash(echo:*)",
+      "Bash(grep:*)",
+      "Bash(jq:*)",
+      "Bash(mkdir:*)",
+      "Bash(rm:*)",
+      "Bash(mv:*)",
+      "Bash(cp:*)",
+      "Bash(chmod:*)",
+      "Bash(find:*)",
+      "Bash(curl:*)",
+      "Bash(open http://localhost:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "WebFetch(domain:npmjs.com)",
+      "WebSearch",
+      "mcp__memory__create_entities",
+      "mcp__memory__create_relations",
+      "mcp__memory__search_nodes",
+      "mcp__memory__open_nodes",
+      "mcp__memory__add_observations",
+      "mcp__memory__read_graph",
+      "mcp__sequential-thinking__sequentialthinking",
+      "SlashCommand(/groom-backlog)",
+      "SlashCommand(/work-ticket)",
+      "SlashCommand(/review-pr)",
+      "SlashCommand(/sprint-status)",
+      "SlashCommand(/check-milestone)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(*.key)",
+      "Read(*credentials*)",
+      "Read(*secret*)",
+      "Write(.env)",
+      "Write(.env.*)",
+      "Bash(gh pr merge:*)"
+    ],
+    "ask": []
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "memory",
+    "sequential-thinking"
+  ],
+  "_comments": {
+    "deny_merge": "IMPORTANT: Bash(gh pr merge:*) is intentionally DENIED to enforce trunk-based development workflow. Only humans can merge PRs. Agents can review (gh pr review) but cannot finalize merges.",
+    "deny_secrets": "Secret files (.env, *.key, credentials) are denied to prevent accidental exposure of sensitive data.",
+    "bot_accounts": "This template assumes separate bot accounts for worker and reviewer agents. See .claude/README.md for setup instructions."
+  }
+}

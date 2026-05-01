@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Todo — Agile Flow GCP{% endblock %}
+
+{% block content %}
+  <hgroup>
+    <h1>Todo</h1>
+    <p>
+      Reference app for the Agile Flow GCP workshop. Delete this and build
+      your own product. The HTMX patterns below show how to swap server-
+      rendered fragments into the DOM without writing any JavaScript.
+    </p>
+  </hgroup>
+
+  <section>
+    <form hx-post="/todos"
+          hx-target="#todo-list"
+          hx-swap="outerHTML"
+          hx-on::after-request="this.reset()">
+      <fieldset role="group">
+        <input type="text"
+               name="title"
+               placeholder="What needs doing?"
+               required
+               autofocus>
+        <button type="submit">Add</button>
+      </fieldset>
+    </form>
+
+    {% include "_fragments/todo_list.html" %}
+  </section>
+
+  <footer>
+    <small>
+      Built with FastAPI + Jinja2 + HTMX on GCP Cloud Run + Neon.
+      See <code>docs/PATTERN-LIBRARY.md</code> for the patterns powering
+      this stack.
+    </small>
+  </footer>
+{% endblock %}

@@ -1,0 +1,191 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+# Required for Workload Identity Federation (keyless auth to GCP).
+# If you are using a service account key instead (workshop shortcut),
+# you can remove the id-token permission but keep contents: read.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    # Don't run on the upstream template repo itself — only on forks that
+    # have configured their own GCP project.
+    if: github.repository != 'vibeacademy/agile-flow-gcp'
+
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+      ARTIFACT_REPO: ${{ vars.ARTIFACT_REPO || 'agile-flow' }}
+      SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE || 'agile-flow-app' }}
+
+    steps:
+      - name: Check for required secrets
+        id: check_secrets
+        # GitHub Actions hard-rejects `secrets.*` in `if:` expressions, so
+        # we promote presence checks into outputs that downstream `if:`
+        # gates can read. `auth_method` selects between WIF (keyless,
+        # recommended) and service account key (workshop shortcut).
+        run: |
+          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "auth_method=none" >> "$GITHUB_OUTPUT"
+            echo "GCP_PROJECT_ID not configured — skipping deployment."
+            echo "See docs/PLATFORM-GUIDE.md for setup instructions."
+          elif [ -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "auth_method=wif" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "auth_method=sa-key" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "auth_method=none" >> "$GITHUB_OUTPUT"
+            echo "Neither GCP_WORKLOAD_IDENTITY_PROVIDER nor GCP_SA_KEY configured — skipping."
+          fi
+
+      - name: Checkout code
+        if: steps.check_secrets.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      # Authenticate to GCP. Prefers Workload Identity Federation (keyless).
+      # Falls back to a service account JSON key if GCP_SA_KEY is set —
+      # this is the workshop shortcut and is NOT recommended for production.
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        if: steps.check_secrets.outputs.auth_method == 'wif'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Authenticate to Google Cloud (Service Account Key fallback)
+        if: steps.check_secrets.outputs.auth_method == 'sa-key'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        if: steps.check_secrets.outputs.skip != 'true'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        if: steps.check_secrets.outputs.skip != 'true'
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      # Set up uv and Python so we can run Alembic migrations against the
+      # production Neon database before the new revision takes traffic.
+      # This ensures the new image never talks to an outdated schema.
+      - name: Install uv
+        if: steps.check_secrets.outputs.skip != 'true'
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.5.x"
+
+      - name: Run Alembic migrations
+        if: steps.check_secrets.outputs.skip != 'true'
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "PRODUCTION_DATABASE_URL not configured — skipping migrations."
+            echo "Set this secret to the Neon main branch pooled URL if you want"
+            echo "the workflow to run migrations before each deploy."
+            exit 0
+          fi
+          uv sync --frozen
+          uv run alembic upgrade head
+
+      - name: Build and push container
+        if: steps.check_secrets.outputs.skip != 'true'
+        id: build
+        run: |
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE_NAME }}:${{ github.sha }}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloud Run
+        if: steps.check_secrets.outputs.skip != 'true'
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.GCP_REGION }}
+          image: ${{ steps.build.outputs.image }}
+          # Runtime-SA pin: --service-account is passed via flags: rather
+          # than as a top-level input, because deploy-cloudrun@v2 does NOT
+          # accept service_account as a top-level input (only auth@v2
+          # does — the asymmetry is easy to miss). Without this flag,
+          # Cloud Run uses the legacy Compute Engine default SA at runtime,
+          # which has none of the roles we provisioned (e.g. secretAccessor).
+          # Traffic shift to the new revision happens in the follow-up
+          # step (Route traffic to latest revision) via
+          # `gcloud run services update-traffic --to-latest`. `gcloud
+          # run deploy` does NOT accept --traffic; passing it here fails
+          # the deploy with `unrecognized arguments: --traffic`. Without
+          # an explicit shift, deploy-cloudrun@v2 leaves the existing
+          # split intact — fine when traffic was already 100% to the
+          # previous latest, but a silent trap when the service was
+          # pre-created with a placeholder revision (Step 5.8 in the
+          # provisioner) that gcloud pinned 100% to. Symptom of getting
+          # this wrong: green CI, service URL serves "Hello from Cloud
+          # Run!" forever. See #61 / #76.
+          flags: |
+            --service-account=${{ secrets.GCP_SERVICE_ACCOUNT }}
+            --port=8080
+            --memory=512Mi
+            --cpu=1
+            --min-instances=0
+            --max-instances=10
+            --allow-unauthenticated
+          # DATABASE_URL is set as a plain env var (not a Secret Manager
+          # mount) so production and preview agree on the env-var TYPE. The
+          # two workflows target the same Cloud Run service; Cloud Run
+          # permits one type per env-var name, never alternating. If
+          # production mounts as secret and preview sets as literal (or
+          # vice-versa), every deploy after the first fails with:
+          #   ERROR: (gcloud.run.deploy) Cannot update environment variable
+          #   [DATABASE_URL] to <type> because it has already been set with
+          #   a different type.
+          # Both workflows now write DATABASE_URL as a literal. The
+          # connection string is on the revision instead of in Secret
+          # Manager — acceptable trade-off because preview already exposes
+          # Neon URLs as literals; consistency between the pipelines is
+          # more valuable than asymmetric hardening of just one. See #67.
+          env_vars: |
+            ENVIRONMENT=production
+            DATABASE_URL=${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: Route traffic to latest revision
+        # success() gates on all prior steps succeeding — without it,
+        # GH Actions evaluates ONLY the listed condition and runs this
+        # step even when the deploy failed (default failure-skip is
+        # bypassed when ANY `if:` is present). Migrating traffic to a
+        # half-deployed or unhealthy revision would turn a recoverable
+        # deploy failure into a production outage. See #79 review.
+        if: steps.check_secrets.outputs.skip != 'true' && success()
+        run: |
+          # Migrate 100% of traffic to the just-deployed revision.
+          # Idempotent — when traffic is already on latest, this is a
+          # no-op. Required because the provisioner's Step 5.8 pre-creates
+          # the service with a placeholder revision pinned at 100%, and
+          # `gcloud run deploy` doesn't migrate traffic away from an
+          # existing pin. See #61 / #76.
+          gcloud run services update-traffic "${{ env.SERVICE_NAME }}" \
+            --region="${{ env.GCP_REGION }}" \
+            --to-latest
+
+      - name: Show deployed URL
+        if: steps.check_secrets.outputs.skip != 'true'
+        run: |
+          URL=$(gcloud run services describe "${{ env.SERVICE_NAME }}" \
+            --region="${{ env.GCP_REGION }}" \
+            --format='value(status.url)')
+          echo "Deployed to: $URL"
+          echo "## Deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "$URL" >> "$GITHUB_STEP_SUMMARY"

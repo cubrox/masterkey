@@ -1,0 +1,149 @@
+name: Agent Activity Audit Report
+
+# Run weekly audit reports to track agent actions and detect restricted action attempts
+# Reports are generated every Monday at 9:00 AM UTC
+# Can also be triggered manually via workflow_dispatch
+
+on:
+  schedule:
+    # Run every Monday at 9:00 AM UTC
+    - cron: '0 9 * * 1'
+
+  workflow_dispatch:
+    inputs:
+      since_date:
+        description: 'Analyze actions since this date (YYYY-MM-DD)'
+        required: false
+        default: ''
+      output_format:
+        description: 'Output format (human/json)'
+        required: false
+        default: 'human'
+        type: choice
+        options:
+          - human
+          - json
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  issues: write
+
+jobs:
+  generate-audit-report:
+    runs-on: ubuntu-latest
+    name: Generate Weekly Agent Audit Report
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for git log analysis
+
+      - name: Setup GitHub CLI
+        run: |
+          # GitHub CLI is pre-installed on GitHub Actions runners
+          gh --version
+
+      - name: Generate audit report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Determine analysis period
+          if [ -n "${{ inputs.since_date }}" ]; then
+            SINCE_ARG="--since ${{ inputs.since_date }}"
+          else
+            # Default to last 7 days
+            SINCE_ARG="--since $(date -d '7 days ago' +%Y-%m-%d)"
+          fi
+
+          # Determine output format
+          if [ "${{ inputs.output_format }}" = "json" ]; then
+            FORMAT_ARG="--json"
+          else
+            FORMAT_ARG=""
+          fi
+
+          # Run analyzer and save report
+          ./scripts/analyze-agent-actions.sh $SINCE_ARG $FORMAT_ARG --output agent-audit-report.txt || true
+
+          # Display report in workflow logs
+          echo "=== Agent Audit Report ==="
+          cat agent-audit-report.txt
+
+      - name: Upload audit report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-audit-report-${{ github.run_number }}
+          path: agent-audit-report.txt
+          retention-days: 90  # Keep reports for 90 days
+
+      - name: Check for restricted actions
+        id: check_restricted
+        run: |
+          # Parse report to check if restricted actions were attempted
+          if grep -q "Restricted Actions Attempted:.*[1-9]" agent-audit-report.txt 2>/dev/null; then
+            echo "restricted_found=true" >> $GITHUB_OUTPUT
+            echo "WARNING: Restricted actions were attempted!"
+          else
+            echo "restricted_found=false" >> $GITHUB_OUTPUT
+            echo "No restricted actions detected."
+          fi
+
+      - name: Create issue for restricted actions (if found)
+        if: steps.check_restricted.outputs.restricted_found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('agent-audit-report.txt', 'utf8');
+
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[ALERT] Restricted Agent Actions Detected - ${new Date().toISOString().split('T')[0]}`,
+              labels: ['safety', 'security', 'audit'],
+              body: `## Agent Audit Alert
+
+            Restricted agent actions were detected during the weekly audit scan.
+
+            **Report Date:** ${new Date().toISOString().split('T')[0]}
+            **Workflow Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
+
+            ### Audit Report
+
+            \`\`\`
+            ${report}
+            \`\`\`
+
+            ### Action Required
+
+            1. Review the restricted actions listed above
+            2. Verify agent policies in \`.claude/agents/\` and \`.claude/commands/\`
+            3. Check GitHub branch protection rules
+            4. Verify agent PAT permissions
+            5. Review recent PR merges and deployments
+
+            ### Investigation Steps
+
+            1. Check the full report artifact in the workflow run
+            2. Review git history for the flagged actions
+            3. Verify no unauthorized code reached production
+            4. Update agent policies if needed
+            5. Run \`./scripts/analyze-agent-actions.sh\` locally for detailed analysis
+
+            ---
+            *This issue was automatically created by the Agent Activity Audit Report workflow.*
+            `
+            });
+
+            console.log(`Created issue #${issue.data.number}`);
+
+      - name: Summary
+        run: |
+          echo "## Agent Audit Report Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat agent-audit-report.txt >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Full report available in workflow artifacts." >> $GITHUB_STEP_SUMMARY

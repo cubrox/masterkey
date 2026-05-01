@@ -1,0 +1,327 @@
+name: Preview Deploy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  ci:
+    name: CI Checks
+    if: github.repository != 'vibeacademy/agile-flow-gcp'
+    uses: ./.github/workflows/ci.yml
+
+  deploy-preview:
+    name: Deploy PR Preview to Cloud Run
+    needs: [ci]
+    if: github.repository != 'vibeacademy/agile-flow-gcp' && needs.ci.result == 'success'
+    runs-on: ubuntu-latest
+
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+      ARTIFACT_REPO: ${{ vars.ARTIFACT_REPO || 'agile-flow' }}
+      SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE || 'agile-flow-app' }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Check for required secrets
+        id: check_secrets
+        # GitHub Actions hard-rejects `secrets.*` in `if:` expressions, so
+        # we promote presence checks into outputs that downstream `if:`
+        # gates can read. `auth_method` selects between WIF (keyless,
+        # recommended) and SA key (workshop shortcut). `neon_configured`
+        # gates the per-PR Neon-branch creation step.
+        run: |
+          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "auth_method=none" >> "$GITHUB_OUTPUT"
+            echo "neon_configured=false" >> "$GITHUB_OUTPUT"
+            echo "GCP_PROJECT_ID not configured — skipping preview deploy."
+          elif [ -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "auth_method=wif" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "auth_method=sa-key" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "auth_method=none" >> "$GITHUB_OUTPUT"
+            echo "neon_configured=false" >> "$GITHUB_OUTPUT"
+            echo "No GCP auth configured — skipping preview deploy."
+          fi
+          if [ -n "${{ secrets.NEON_API_KEY }}" ]; then
+            echo "neon_configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "neon_configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout code
+        if: steps.check_secrets.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      # ── Neon: create branch database for this PR ──────────────────────
+
+      - name: Create Neon branch
+        id: neon
+        if: steps.check_secrets.outputs.skip != 'true' && steps.check_secrets.outputs.neon_configured == 'true'
+        uses: neondatabase/create-branch-action@v5
+        with:
+          project_id: ${{ secrets.NEON_PROJECT_ID }}
+          branch_name: pr-${{ env.PR_NUMBER }}
+          # Workshop forks set NEON_PARENT_BRANCH to the attendee's branch name
+          # (e.g. "alice") so per-PR previews inherit that attendee's schema.
+          # Non-workshop forks leave it unset and fall back to the literal
+          # string "main" — which assumes the Neon project's default branch
+          # is named "main". Projects that were created with a different
+          # default name (e.g. "production") MUST set NEON_PARENT_BRANCH
+          # explicitly per fork; the literal-string fallback below does not
+          # query the project's actual default and will silently fail or
+          # create a sibling. See docs/PLATFORM-GUIDE.md "Neon Branch Model"
+          # for the canonical naming requirements (#90).
+          # `||` is fine inside `with:` — only `if:` rejects `secrets.*`.
+          parent: ${{ secrets.NEON_PARENT_BRANCH || 'main' }}
+          username: ${{ vars.NEON_DB_USER || 'neondb_owner' }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+
+      # ── Apply Alembic migrations to the Neon branch ──────────────────
+
+      - name: Verify Neon branch produced a usable connection URL
+        # Silent-skip-cascade guard (#52). When neon_configured is true,
+        # `Create Neon branch` MUST produce `db_url_with_pooler`. An
+        # empty output here means the Neon action ran but failed to
+        # emit its output (e.g. an output-name typo regression, an API
+        # change, or a transient Neon API failure). Without this step,
+        # downstream gates would silently skip migrations and the
+        # preview deploy would ship with an empty DATABASE_URL — green
+        # CI, broken preview. Fail loud here turns the latent failure
+        # into a workflow-level error users actually see. See #52, #78.
+        if: steps.check_secrets.outputs.skip != 'true' && steps.check_secrets.outputs.neon_configured == 'true'
+        run: |
+          if [ -z "${{ steps.neon.outputs.db_url_with_pooler }}" ]; then
+            echo "::error::Neon branch step succeeded but did not emit db_url_with_pooler."
+            echo "::error::This is a silent-failure regression — the action ran but produced no usable output."
+            echo "::error::Likely causes: output-name typo, Neon action API change, or upstream transient failure."
+            exit 1
+          fi
+          echo "Neon db_url_with_pooler is populated; proceeding to migrations."
+
+      - name: Install uv
+        if: steps.check_secrets.outputs.skip != 'true' && steps.check_secrets.outputs.neon_configured == 'true'
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.5.x"
+
+      - name: Run Alembic migrations against branch database
+        if: steps.check_secrets.outputs.skip != 'true' && steps.check_secrets.outputs.neon_configured == 'true'
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url_with_pooler }}
+        run: |
+          uv sync --frozen
+          uv run alembic upgrade head
+
+      # ── GCP: auth and build image ─────────────────────────────────────
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        if: steps.check_secrets.outputs.auth_method == 'wif'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Authenticate to Google Cloud (Service Account Key fallback)
+        if: steps.check_secrets.outputs.auth_method == 'sa-key'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        if: steps.check_secrets.outputs.skip != 'true'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        if: steps.check_secrets.outputs.skip != 'true'
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push preview image
+        if: steps.check_secrets.outputs.skip != 'true'
+        id: build
+        run: |
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE_NAME }}:pr-${{ env.PR_NUMBER }}-${{ github.event.pull_request.head.sha }}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      # ── Deploy as a Cloud Run revision tag with zero traffic ──────────
+      #
+      # The --tag=pr-N flag creates a stable URL for this PR without
+      # affecting the main service traffic. --no-traffic ensures production
+      # users are never routed to preview code.
+      - name: Deploy preview revision
+        if: steps.check_secrets.outputs.skip != 'true'
+        id: deploy
+        run: |
+          # Build the runtime env var list. DATABASE_URL comes from Neon
+          # branch output if available, otherwise falls back to the default
+          # secret mount (production DB). We merge all env vars into a
+          # single --set-env-vars value because gcloud forbids combining
+          # --set-env-vars with --update-env-vars in one invocation.
+          # The ^;^ prefix changes gcloud's KEY=val separator from comma
+          # to ';'. Required because Neon URLs contain '@' (user@host) and
+          # may URL-encode commas in passwords; ';' is forbidden in URLs
+          # and not used by gcloud as a default separator anywhere else.
+          ENV_VARS="^;^ENVIRONMENT=preview;PR_NUMBER=${{ env.PR_NUMBER }}"
+          if [ -n "${{ steps.neon.outputs.db_url_with_pooler }}" ]; then
+            ENV_VARS="${ENV_VARS};DATABASE_URL=${{ steps.neon.outputs.db_url_with_pooler }}"
+          fi
+
+          # --service-account pins the runtime SA to the deployer SA so
+          # the revision can read mounted Secret Manager secrets and any
+          # other resource the deployer SA already has access to. Without
+          # this, Cloud Run uses the legacy Compute Engine default SA at
+          # runtime, which has none of the roles provisioned in Step 5.
+          # Capture deploy stdout+stderr so we can extract the tagged
+          # revision URL directly. gcloud prints
+          #   "The revision can be reached directly at <url>"
+          # which is the canonical tagged URL — more reliable than a
+          # second `gcloud run services describe` call with --format
+          # filtering, which used to silently return empty.
+          # pipefail is required so gcloud failures aren't masked by tee.
+          set -o pipefail
+          DEPLOY_LOG=$(mktemp)
+          gcloud run deploy "${{ env.SERVICE_NAME }}" \
+            --image="${{ steps.build.outputs.image }}" \
+            --region="${{ env.GCP_REGION }}" \
+            --service-account="${{ secrets.GCP_SERVICE_ACCOUNT }}" \
+            --tag="pr-${{ env.PR_NUMBER }}" \
+            --no-traffic \
+            --port=8080 \
+            --memory=512Mi \
+            --cpu=1 \
+            --min-instances=0 \
+            --max-instances=3 \
+            --allow-unauthenticated \
+            --set-env-vars="${ENV_VARS}" 2>&1 | tee "$DEPLOY_LOG"
+
+          PREVIEW_URL=$(grep -oE 'https://pr-[0-9]+---[^ ]+\.run\.app' "$DEPLOY_LOG" | head -n1)
+
+          if [ -z "$PREVIEW_URL" ]; then
+            echo "ERROR: deploy succeeded but no tagged URL found in gcloud output"
+            exit 1
+          fi
+
+          echo "preview_url=$PREVIEW_URL" >> "$GITHUB_OUTPUT"
+          echo "Preview URL: $PREVIEW_URL"
+
+      - name: Smoke test
+        if: steps.check_secrets.outputs.skip != 'true'
+        id: smoke_test
+        run: |
+          PREVIEW_URL="${{ steps.deploy.outputs.preview_url }}"
+
+          if [ -z "$PREVIEW_URL" ]; then
+            echo "ERROR: preview_url output is empty — deploy step should have failed already"
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # Phase 1: app readiness — /api/health does NOT touch the DB,
+          # so a passing probe means the container booted and is serving
+          # HTTP. Retry loop covers Cloud Run cold-start + Neon wake.
+          echo "Phase 1: $PREVIEW_URL/api/health"
+
+          health_passed=false
+          for ATTEMPT in $(seq 1 10); do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$PREVIEW_URL/api/health" || echo "000")
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "Health check passed"
+              health_passed=true
+              break
+            fi
+            echo "Attempt $ATTEMPT: HTTP $HTTP_STATUS, retrying in 6s..."
+            sleep 6
+          done
+
+          if [ "$health_passed" != "true" ]; then
+            echo "::error::Container readiness probe failed after 10 attempts"
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # Phase 2: DB reachability — /api/health/db runs `SELECT 1`.
+          # Distinct from /api/health: catches the failure mode where
+          # the container is up but DATABASE_URL is empty/broken (added
+          # in #78 after a 2026-04-30 dry-run shipped a green-CI preview
+          # with no DB and an opaque 500 on the home route).
+          echo "Phase 2: $PREVIEW_URL/api/health/db"
+
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$PREVIEW_URL/api/health/db" || echo "000")
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::error::DB health probe returned $HTTP_STATUS — DB connection or migrations may be broken"
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "DB health check passed"
+          echo "result=passed" >> "$GITHUB_OUTPUT"
+
+      # ── Comment on the PR with preview info ───────────────────────────
+
+      - name: Comment PR with preview status
+        if: always() && steps.check_secrets.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const previewUrl = '${{ steps.deploy.outputs.preview_url }}';
+            const neonBranch = '${{ steps.neon.outputs.branch_id }}';
+            const smoke = '${{ steps.smoke_test.outputs.result }}';
+
+            let body = '## Preview Deployment\n\n';
+            body += '| Component | Status |\n';
+            body += '|-----------|--------|\n';
+            body += `| Preview URL | ${previewUrl || 'Not deployed'} |\n`;
+            body += `| Cloud Run tag | \`pr-${{ env.PR_NUMBER }}\` |\n`;
+            body += `| Neon branch | ${neonBranch ? `\`pr-${{ env.PR_NUMBER }}\`` : 'Not configured'} |\n`;
+            body += `| Smoke test | ${smoke === 'passed' ? 'Passed' : smoke === 'failed' ? 'Failed' : 'Skipped'} |\n\n`;
+
+            if (previewUrl && smoke === 'passed') {
+              body += `### Ready for testing\n\n${previewUrl}\n`;
+            } else if (smoke === 'failed') {
+              body += '### Smoke test failed\n\nCheck the [workflow logs](' +
+                `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}` +
+                ') for details.\n';
+            }
+
+            body += '\n---\n*Deployed automatically by preview-deploy.yml to Cloud Run with zero traffic.*';
+
+            const { data: comments } = await github.rest.issues.listComments({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            const existing = comments.find(c => c.body?.startsWith('## Preview Deployment'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                comment_id: existing.id,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body,
+              });
+            }
+
+      - name: Fail if smoke test failed
+        if: steps.smoke_test.outputs.result == 'failed'
+        run: exit 1

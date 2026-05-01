@@ -1,0 +1,139 @@
+#!/bin/bash
+#
+# Pre-push hook: Runs lint and tests before allowing push.
+# Prevents broken code from reaching the remote.
+#
+# Installation:
+#   git config core.hooksPath scripts/hooks
+#
+# Language auto-detection (priority order):
+#   1. Node.js — package.json exists AND contains vitest/jest/test script
+#   2. Python  — pyproject.toml exists AND uv is available
+#   3. Go      — go.mod exists
+#   4. Node.js — package.json exists (fallback, no test deps detected)
+#   5. Python  — pyproject.toml exists (fallback, uv not available)
+#
+# This ordering handles the common case where a project switches stacks
+# (e.g., Python template → Next.js) and both pyproject.toml and
+# package.json coexist during the transition.
+#
+# Falls through gracefully if no recognized project file is found.
+#
+
+set -e
+
+echo "Running pre-push checks..."
+echo ""
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+FAILED=0
+
+run_check() {
+  local label="$1"
+  shift
+  echo "  $label"
+  if "$@" 2>&1; then
+    echo -e "  ${GREEN}passed${NC}"
+  else
+    echo -e "  ${RED}failed${NC}"
+    FAILED=1
+  fi
+  echo ""
+}
+
+# ---------------------------------------------------------------------------
+#  Detect stack — priority order handles coexistence of config files
+# ---------------------------------------------------------------------------
+STACK=""
+
+if [ -f "package.json" ]; then
+  # Check if package.json has test-related dependencies or a test script
+  if grep -qE '"vitest"|"jest"|"mocha"|"ava"' package.json 2>/dev/null || \
+     grep -qE '"test"\s*:' package.json 2>/dev/null; then
+    STACK="node"
+  fi
+fi
+
+if [ -z "$STACK" ] && [ -f "pyproject.toml" ] && command -v uv &>/dev/null; then
+  STACK="python"
+fi
+
+if [ -z "$STACK" ] && [ -f "go.mod" ]; then
+  STACK="go"
+fi
+
+# Fallbacks: config file exists but no strong signal above
+if [ -z "$STACK" ] && [ -f "package.json" ]; then
+  STACK="node"
+fi
+
+if [ -z "$STACK" ] && [ -f "pyproject.toml" ]; then
+  STACK="python"
+fi
+
+# ---------------------------------------------------------------------------
+#  Run checks for the detected stack
+# ---------------------------------------------------------------------------
+case "$STACK" in
+  node)
+    echo "Detected Node.js project"
+    echo ""
+
+    # Determine package runner
+    if [ -f "bun.lockb" ] || [ -f "bun.lock" ]; then
+      runner="bun"
+    elif [ -f "pnpm-lock.yaml" ]; then
+      runner="pnpm"
+    elif [ -f "yarn.lock" ]; then
+      runner="yarn"
+    else
+      runner="npx"
+    fi
+
+    # Lint
+    if command -v "$runner" &>/dev/null; then
+      if [ -f ".eslintrc" ] || [ -f ".eslintrc.js" ] || [ -f ".eslintrc.json" ] || [ -f "eslint.config.js" ] || [ -f "eslint.config.mjs" ]; then
+        run_check "eslint" $runner eslint .
+      fi
+    fi
+
+    # Test
+    if grep -q '"vitest"' package.json 2>/dev/null; then
+      run_check "vitest" $runner vitest run
+    elif grep -q '"jest"' package.json 2>/dev/null; then
+      run_check "jest" $runner jest
+    fi
+    ;;
+
+  python)
+    echo "Detected Python project"
+    echo ""
+    run_check "ruff check" uv run ruff check .
+    run_check "pytest" uv run pytest --tb=short -q
+    ;;
+
+  go)
+    echo "Detected Go project"
+    echo ""
+    run_check "go vet" go vet ./...
+    run_check "go test" go test ./...
+    ;;
+
+  *)
+    echo "No recognized project file found — skipping pre-push checks."
+    exit 0
+    ;;
+esac
+
+if [ $FAILED -eq 1 ]; then
+  echo ""
+  echo -e "${RED}Pre-push checks failed. Fix errors before pushing.${NC}"
+  exit 1
+fi
+
+echo -e "${GREEN}All pre-push checks passed.${NC}"
+exit 0
