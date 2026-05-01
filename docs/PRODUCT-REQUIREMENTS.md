@@ -1,112 +1,137 @@
 # Product Requirements Document
 
-<!--
-TEMPLATE: This is a template PRD. Run /bootstrap-product to fill it in
-with your product details through a guided questionnaire.
-
-Replace all [PLACEHOLDER] content with your actual product information.
-Remove the EXAMPLE markers when you replace the content.
--->
-
 ## Product Overview
 
-- **Name**: [Your product name]
-- **Type**: [Web app | Mobile app | API service | CLI tool | Library | Other]
-- **Category**: [B2B SaaS | B2C Consumer | Developer tools | E-commerce | Other]
+- **Name**: Cubrox (working name — TBD)
+- **Type**: Web application
+- **Category**: Content/Media platform
+- **Domain**: A website that makes Baha'i writings (WCAG-accessible) easier to read for neurodivergent readers
+- **Value Proposition**: An improved reading experience for neurodivergent readers
 
 ## Vision and Problem Statement
 
 ### Problem
 
-[Describe the problem your product solves in 1-3 sentences.]
-
-<!-- EXAMPLE -- replace with your content:
-Development teams waste 40% of their time on repetitive coordination tasks
-that could be automated with AI agents, but lack safe guardrails for
-integrating AI into their workflows.
--->
+Neurodivergent readers find it harder to focus on and process text. The
+primary friction is sustained attention — many readers cannot hold focus on
+a passage for more than a couple of minutes, which makes engaging with
+longer-form holy writings especially difficult.
 
 ### Vision
 
-[One sentence describing the ideal future state your product creates.]
+Every neurodivergent reader can engage deeply with Baha'i writings — and any
+other text they choose to bring — through a reading experience tuned to how
+they personally focus, process, and comprehend.
 
 ### How People Solve This Today
 
-[What alternatives or workarounds exist? Why are they inadequate?]
+Most don't. Today, readers in this situation simply live with the pain.
+Adjacent tools (Beeline Reader, ADHD reading helpers / "bionize"-style
+bionic reading, Microsoft Immersive Reader) offer general-purpose reading
+support but are not tailored to holy writings or to the specific needs of
+neurodivergent readers engaging with sacred text.
 
 ## Target Audience
 
 ### Primary Users
 
-- **Who**: [Role, context, and goal in one sentence]
-- **Pain Point**: [The #1 problem they face]
-- **Current Solution**: [How they solve it today]
+- **Who**: A neurodivergent person who wants an easier experience reading
+  holy texts (specifically Baha'i writings).
+- **Pain Point**: Cannot hold attention on a text passage for more than a
+  couple of minutes.
+- **Current Solution**: None — they push through, give up, or rely on
+  general-purpose reading aids that are not designed for sacred text.
 
 ### Secondary Users
 
-[Other user types, or "None -- single user type"]
+Anyone who wants an improved reading experience — readers without a formal
+neurodivergence diagnosis but who benefit from the same accommodations
+(e.g., readers with fatigue, dyslexia, ESL readers, or simply readers who
+prefer a calmer reading surface).
 
 ## Features
 
 ### MVP (Must Have)
 
-<!-- List 3-5 features that MUST be in v1. Be specific and testable. -->
-
-- [ ] [Feature 1 -- specific and measurable]
-- [ ] [Feature 2]
-- [ ] [Feature 3]
+- [ ] **Text passage input** — paste or type text passages directly into
+      the reader.
+- [ ] **Document upload (PDF)** — upload a PDF and read it inside the
+      tailored reading experience.
+- [ ] **Reading-support toolkit** — choose the type of support applied to a
+      passage. v1 includes at minimum:
+  - Visual reformatting (font, size, color, spacing, contrast).
+  - Comprehension checks (auto-generated questions to confirm
+    understanding of what was just read).
+- [ ] **Email login** — register and sign in with email.
+- [ ] **Saved preferences** — reading-support choices persist per user
+      across sessions and devices.
 
 ### Out of Scope (v1)
 
-<!-- Equally important: what are you NOT building? -->
-
-- [Feature explicitly excluded from v1]
+- **Internationalization** — v1 ships English only. No multi-language UI,
+  no multi-language source-text support beyond what the user pastes in.
 
 ### Core Value Proposition
 
-[The ONE thing your product must do exceptionally well.]
+Make text easier to read and understand — that is the one thing this
+product must do exceptionally well.
 
 ## Success Metrics
 
-| Metric | Target (3 months) |
-|--------|-------------------|
-| Primary: [e.g., Monthly active users] | [e.g., 500] |
-| Secondary: [e.g., Retention rate] | [e.g., 60%] |
+| Metric                                                    | Target (3 months) |
+|-----------------------------------------------------------|-------------------|
+| Primary: Lines of text read/processed through the product | 100,000           |
 
 ## Competitive Analysis
 
-| Competitor | Strength | Weakness | Your Differentiator |
-|-----------|----------|----------|---------------------|
-| [Name] | [What they do well] | [Where they fall short] | [Why you win] |
+| Competitor                  | Strength                                         | Weakness                                                     | Our Differentiator                          |
+|-----------------------------|--------------------------------------------------|--------------------------------------------------------------|---------------------------------------------|
+| Beeline Reader              | Color-gradient guides eye across lines           | Generic; not designed for sacred text or comprehension       | Tailored to holy writings + comprehension   |
+| ADHD Reading Helper / Bionize | Bionic-reading-style emphasis aids fast scanning | Single technique; doesn't adapt to individual reader profiles | Multiple support modes + per-user prefs     |
+| Microsoft Immersive Reader  | Mature accessibility toolkit, broad availability | General-purpose; embedded inside MS products; not faith-aware | Purpose-built for Baha'i writings           |
 
 ## Constraints and Requirements
 
-- **Timeline**: [When do you need to launch?]
-- **Budget**: [Resource constraints]
-- **Technical**: [Must-use technologies, compliance requirements]
-- **Team**: [Available expertise]
+- **Timeline**: Launch in 3–6 months (target window: 2026-08 to 2026-11).
+- **Key product constraint**: Readability needs vary significantly between
+  individuals — what makes text readable for one neurodivergent person may
+  be very different for another. The product must accommodate this with
+  configurable, per-user support choices rather than a single "accessible"
+  preset.
+- **Technical**: Google Cloud (Cloud Run), Neon (serverless Postgres),
+  FastAPI. Aligns with this repo's existing stack (FastAPI + Jinja2 + HTMX
+  on Python 3.12, SQLModel + Alembic, deployed to Cloud Run).
 
 ## Non-Functional Requirements
 
-| Category | Requirement |
-|----------|-------------|
-| Security | [Auth approach, data protection] |
-| Performance | [Latency, throughput targets] |
-| Scalability | [Expected load, growth] |
-| Accessibility | [WCAG level, requirements] |
+| Category      | Requirement                                                                 |
+|---------------|-----------------------------------------------------------------------------|
+| Accessibility | WCAG conformance is a defining product requirement, not a checkbox          |
+| Security      | Email-based auth; user preferences stored per account                       |
+| Performance   | Reading view must feel instant (perceived latency < 100ms for view changes) |
+| Scalability   | Sized to support the 100k-lines-in-3-months target and beyond               |
 
 ## Dependencies
 
-- [External service or tool this product depends on]
+- Source corpus of Baha'i writings (licensing / canonical source TBD).
+- PDF parsing pipeline for the upload flow.
+- LLM or rules-based engine for auto-generated comprehension questions
+  (provider TBD during architecture phase).
 
 ## Risks and Mitigations
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| [Risk description] | High/Medium/Low | [How to prevent or handle] |
+| Risk                                                                                  | Impact | Mitigation                                                                                  |
+|---------------------------------------------------------------------------------------|--------|---------------------------------------------------------------------------------------------|
+| Readability needs differ across users; a single design won't fit                      | High   | Modular support toolkit; per-user saved preferences; recruit diverse beta testers           |
+| Comprehension-question quality is uneven for sacred/poetic text                       | High   | Constrained prompts, source-grounded checks, ability to disable per passage                 |
+| PDF ingestion produces messy text that defeats reading aids                           | Medium | Validate parser on representative documents early; surface ingestion errors to user         |
+| Scope creep into i18n or non-Baha'i corpora before MVP validates                      | Medium | i18n explicitly out of scope for v1; defer broader corpora until MVP metric proven          |
 
 ## Glossary
 
-| Term | Definition |
-|------|------------|
-| [Domain term] | [What it means in this product] |
+| Term                         | Definition                                                                                  |
+|------------------------------|---------------------------------------------------------------------------------------------|
+| Neurodivergent reader        | A reader whose cognition differs from typical norms (ADHD, autism, dyslexia, etc.)          |
+| Reading support              | A configurable transformation applied to a passage to aid focus or comprehension            |
+| Comprehension check          | Auto-generated question(s) confirming the reader understood a passage                       |
+| Holy writings (in this PRD)  | Baha'i sacred texts; v1 corpus scope                                                        |
