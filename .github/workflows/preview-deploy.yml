@@ -178,6 +178,17 @@ jobs:
           if [ -n "${{ steps.neon.outputs.db_url_with_pooler }}" ]; then
             ENV_VARS="${ENV_VARS};DATABASE_URL=${{ steps.neon.outputs.db_url_with_pooler }}"
           fi
+          # Sign-in flow needs SESSION_SECRET (cookie signer; AUTH-2 #10)
+          # and RESEND_API_KEY (magic-link email send; AUTH-1 #9). Both
+          # are repo secrets. Empty values fall through silently — the
+          # app's Settings validators will refuse to start with bad
+          # defaults, which is the desired behavior.
+          if [ -n "${{ secrets.SESSION_SECRET }}" ]; then
+            ENV_VARS="${ENV_VARS};SESSION_SECRET=${{ secrets.SESSION_SECRET }}"
+          fi
+          if [ -n "${{ secrets.RESEND_API_KEY }}" ]; then
+            ENV_VARS="${ENV_VARS};RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}"
+          fi
 
           # --service-account pins the runtime SA to the deployer SA so
           # the revision can read mounted Secret Manager secrets and any
