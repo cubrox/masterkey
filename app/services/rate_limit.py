@@ -15,10 +15,12 @@ Logging discipline: we never log raw emails. Rate-limit hits log
 `route` + 16-hex-char SHA-256 prefix of the email so support can
 correlate without leaking PII into Cloud Logging.
 
-Concurrency: production Postgres uses `SELECT ... FOR UPDATE` so two
-concurrent requests can't both decrement the same bucket below zero.
-SQLite (in tests) treats `FOR UPDATE` as a no-op, which is fine — the
-test session is single-threaded.
+Concurrency: the SELECT uses `with_for_update()` so on Postgres, two
+concurrent workers can't both read the same `tokens` value and clobber
+each other's decrement. SQLite (in tests) silently ignores the lock
+hint, which is fine — the test session is single-threaded. The
+first-touch INSERT is handled separately in `_take_token` (catches
+`IntegrityError`, recurses once into the locked-update path).
 """
 
 import hashlib
@@ -29,7 +31,8 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request
-from sqlmodel import Session
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, select
 
 from app.db import get_session
 from app.models.rate_bucket import RateBucket
@@ -83,15 +86,35 @@ class BucketResult:
 def _take_token(session: Session, key: str, now: datetime) -> BucketResult:
     """Atomically refill + decrement one bucket.
 
+    On Postgres, the SELECT uses `FOR UPDATE` so two concurrent workers
+    can't both read the same `tokens` value, decrement, and clobber each
+    other's write. SQLite (in tests) silently drops the lock hint — the
+    test session is single-threaded so this is fine.
+
+    First-touch INSERT is a separate race: two concurrent first-ever
+    requests for the same key both miss the SELECT, both attempt INSERT,
+    one wins, the other hits `IntegrityError`. We catch and recurse
+    once — by then the row exists and the FOR-UPDATE path is taken.
+
     Returns the outcome. Caller is responsible for committing the
     session if all buckets in the request succeed, or rolling back if
     any fails.
     """
-    bucket = session.get(RateBucket, key)
+    stmt = select(RateBucket).where(RateBucket.key == key).with_for_update()
+    bucket = session.exec(stmt).first()
+
     if bucket is None:
         # First touch: start with a full bucket, immediately decrement one.
+        # If another request races us to INSERT, the unique-PK constraint
+        # fires; we retry once, and the second pass takes the locked-update
+        # path.
         bucket = RateBucket(key=key, tokens=BUCKET_SIZE - 1.0, refilled_at=now)
         session.add(bucket)
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            return _take_token(session, key, now)
         return BucketResult(
             allowed=True,
             tokens_remaining=BUCKET_SIZE - 1.0,
