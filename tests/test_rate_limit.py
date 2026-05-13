@@ -206,10 +206,7 @@ def test_rate_limit_log_hashes_the_email(
     import hashlib
 
     expected_prefix = hashlib.sha256(sensitive.encode("utf-8")).hexdigest()[:16]
-    assert any(
-        expected_prefix in ((msg % args) if args else msg)
-        for msg, args in warn_calls
-    )
+    assert any(expected_prefix in ((msg % args) if args else msg) for msg, args in warn_calls)
 
 
 # ---------------------------------------------------------------------------
