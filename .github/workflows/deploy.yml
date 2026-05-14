@@ -157,9 +157,44 @@ jobs:
           # Manager — acceptable trade-off because preview already exposes
           # Neon URLs as literals; consistency between the pipelines is
           # more valuable than asymmetric hardening of just one. See #67.
+          # Every env var the production app needs at runtime is set here,
+          # explicitly, so the deployed revision never depends on whatever
+          # state was set manually on the Cloud Run service in the past.
+          # See issue #49 — production ran for the entire build-out arc
+          # with RESEND_API_KEY and SESSION_SECRET silently preserved
+          # from a one-time manual operation; this is the structural fix.
+          #
+          # deploy-cloudrun@v2 passes this block as --update-env-vars
+          # (merge semantics): vars not listed here are preserved, listed
+          # vars overwrite. Listing the full set (re)asserts production's
+          # intended config on every deploy — no more drift from manual
+          # interventions that nobody documented.
+          #
+          # Secrets sourced from GitHub Secrets:
+          #   - PRODUCTION_DATABASE_URL  → DATABASE_URL    (Neon production)
+          #   - SESSION_SECRET           → SESSION_SECRET  (cookie signer)
+          #   - RESEND_API_KEY           → RESEND_API_KEY  (magic-link email)
+          #   - ANTHROPIC_API_KEY (opt)  → ANTHROPIC_API_KEY (comp questions)
+          #
+          # Non-secret config sourced from GitHub repository Variables
+          # (with safe defaults so a fresh fork deploys without manual
+          # GitHub Settings touches):
+          #   - vars.MAGIC_LINK_BASE_URL   → MAGIC_LINK_BASE_URL
+          #     Default: the Cloud Run-issued URL. Override once a custom
+          #     domain is mapped to the service.
+          #   - vars.MAGIC_LINK_FROM_EMAIL → MAGIC_LINK_FROM_EMAIL
+          #     Default: onboarding@resend.dev — Resend's shared free-tier
+          #     sender, which can only deliver to the Resend account
+          #     owner's address. Once a domain is verified at Resend,
+          #     override this var with noreply@<verified-domain>.
           env_vars: |
             ENVIRONMENT=production
             DATABASE_URL=${{ secrets.PRODUCTION_DATABASE_URL }}
+            SESSION_SECRET=${{ secrets.SESSION_SECRET }}
+            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+            MAGIC_LINK_BASE_URL=${{ vars.MAGIC_LINK_BASE_URL || 'https://agile-flow-app-heo5ry7rua-uc.a.run.app' }}
+            MAGIC_LINK_FROM_EMAIL=${{ vars.MAGIC_LINK_FROM_EMAIL || 'onboarding@resend.dev' }}
 
       - name: Route traffic to latest revision
         # success() gates on all prior steps succeeding — without it,
