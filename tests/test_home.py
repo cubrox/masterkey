@@ -128,6 +128,22 @@ def test_landing_page_mentions_product_name(client: TestClient) -> None:
     assert "Master Key" in body
 
 
+def test_landing_page_includes_master_key_epigraph(client: TestClient) -> None:
+    """The Bahá'u'lláh quote that gives the product its name is the
+    branding anchor for the landing page — pin both the quote text
+    and the attribution so a future refactor can't silently drop the
+    context behind the name."""
+    body = client.get("/").text
+    # Quote substring (chosen to be distinctive but not so long that
+    # a minor punctuation tweak would break the test).
+    assert "master key for the whole world" in body
+    # Attribution — visible to the visitor.
+    assert "Bahá'u'lláh" in body
+    # Rendered as a semantic blockquote, not inline body copy.
+    assert "<blockquote" in body
+    assert 'class="master-key-epigraph"' in body
+
+
 def test_landing_page_does_not_mention_todos(client: TestClient) -> None:
     """The todo demo was the starter scaffolding. Make sure no leftover
     text bleeds through into the landing page."""
