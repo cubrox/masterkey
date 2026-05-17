@@ -107,3 +107,20 @@
   color: var(--pico-muted-color);
   text-align: center;
 }
+
+/* Landing-page epigraph quote — names the source of "Master Key"
+   (Bahá'u'lláh's "the Word is the master key…"). Rendered below the
+   description paragraph in italics and a smaller size so it reads as
+   supporting context, not body copy. */
+.master-key-epigraph {
+  font-size: 0.875rem;
+  margin-top: 2.5rem;
+}
+
+.master-key-epigraph footer {
+  /* De-emphasize the attribution slightly so the quote itself
+     carries the focus. */
+  margin-top: 0.5rem;
+  font-style: normal;
+  color: var(--pico-muted-color);
+}
