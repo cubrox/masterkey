@@ -190,6 +190,37 @@ jobs:
             ENV_VARS="${ENV_VARS};RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}"
           fi
 
+          # Neon Auth (AUTH-7 / #62). The AUTH_PROVIDER flag selects
+          # between the legacy Resend path and the new Neon Auth path;
+          # both code paths ship in the same image so a flip is a single
+          # env var update + revision restart (~30s rollback window).
+          # Default `resend` preserves current preview behavior — flip to
+          # `neon` via the repo variable AUTH_PROVIDER once T11 (#71)
+          # validates the path end-to-end on a preview.
+          #
+          # Neon Auth configuration is per-PROJECT, not per-branch (the
+          # JWKS URL and Stack server/publishable keys live at the project
+          # root in the Neon Console). So all PR previews share the dev
+          # project's values — there is no per-PR Neon Auth provisioning
+          # to do here. Laura captures these once in AUTH-6 (#61) and
+          # stores them as the NEON_AUTH_DEV_* repo secrets.
+          ENV_VARS="${ENV_VARS};AUTH_PROVIDER=${{ vars.AUTH_PROVIDER || 'resend' }}"
+          if [ -n "${{ secrets.NEON_AUTH_DEV_BASE_URL }}" ]; then
+            ENV_VARS="${ENV_VARS};NEON_AUTH_BASE_URL=${{ secrets.NEON_AUTH_DEV_BASE_URL }}"
+          fi
+          if [ -n "${{ secrets.NEON_AUTH_DEV_JWKS_URL }}" ]; then
+            ENV_VARS="${ENV_VARS};NEON_AUTH_JWKS_URL=${{ secrets.NEON_AUTH_DEV_JWKS_URL }}"
+          fi
+          if [ -n "${{ secrets.NEON_AUTH_COOKIE_SECRET }}" ]; then
+            ENV_VARS="${ENV_VARS};NEON_AUTH_COOKIE_SECRET=${{ secrets.NEON_AUTH_COOKIE_SECRET }}"
+          fi
+          if [ -n "${{ secrets.NEON_AUTH_DEV_SERVER_KEY }}" ]; then
+            ENV_VARS="${ENV_VARS};STACK_SECRET_SERVER_KEY=${{ secrets.NEON_AUTH_DEV_SERVER_KEY }}"
+          fi
+          if [ -n "${{ secrets.NEON_AUTH_DEV_PUBLISHABLE_KEY }}" ]; then
+            ENV_VARS="${ENV_VARS};STACK_PUBLISHABLE_CLIENT_KEY=${{ secrets.NEON_AUTH_DEV_PUBLISHABLE_KEY }}"
+          fi
+
           # --service-account pins the runtime SA to the deployer SA so
           # the revision can read mounted Secret Manager secrets and any
           # other resource the deployer SA already has access to. Without

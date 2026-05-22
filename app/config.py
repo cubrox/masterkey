@@ -42,6 +42,30 @@ class Settings(BaseSettings):
     session_ttl_days: int = 30
     session_cookie_secure: bool = True
 
+    # Neon Auth (AUTH-7 / #62). Populated per-environment from the values
+    # captured by Laura in AUTH-6 / #61 via the Neon Console. Per Neon's
+    # 2026-01-30 breaking change, NEON_AUTH_COOKIE_SECRET became mandatory
+    # for session signing — generate once with
+    # `python -c "import secrets; print(secrets.token_urlsafe(32))"` and
+    # share across environments (it's the cookie signer, not a per-branch
+    # key).
+    #
+    # The migration ships behind the AUTH_PROVIDER flag (T6 / #66): both
+    # the Resend code path AND the Neon Auth code path live in the same
+    # image, and the flag selects which one /login dispatches to. Default
+    # `resend` preserves current behavior; T12 flips production to `neon`.
+    auth_provider: str = "resend"  # "resend" | "neon"
+    neon_auth_base_url: str = ""
+    neon_auth_jwks_url: str = ""
+    neon_auth_cookie_secret: str = ""
+    stack_secret_server_key: str = ""
+    # Publishable client key — public-by-design, exposed to the browser via
+    # the sign-in template. Name follows Neon's convention which mirrors
+    # Stack Auth's frontend-framework prefixes (NEXT_PUBLIC_ / VITE_); we
+    # don't host a JS bundler so we drop the framework prefix here and
+    # surface the value to Jinja via this single name.
+    stack_publishable_client_key: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -92,6 +116,63 @@ class Settings(BaseSettings):
                 "var (production reads from the SESSION_SECRET secret in Secret "
                 "Manager). Without this, every session cookie is forgeable."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_neon_auth_consistency(self) -> Self:
+        # When AUTH_PROVIDER is "neon", all five Neon Auth env vars must be
+        # populated. We refuse to start rather than 500ing on the first sign-in
+        # request. The AUTH_PROVIDER flag (T6) keeps the migration safely
+        # gated: default "resend" preserves current behavior; flipping to
+        # "neon" requires all values present.
+        if self.auth_provider not in ("resend", "neon"):
+            raise ValueError(
+                f"AUTH_PROVIDER must be 'resend' or 'neon' (got {self.auth_provider!r})."
+            )
+        if self.auth_provider == "neon":
+            missing = [
+                name
+                for name, value in (
+                    ("NEON_AUTH_BASE_URL", self.neon_auth_base_url),
+                    ("NEON_AUTH_JWKS_URL", self.neon_auth_jwks_url),
+                    ("NEON_AUTH_COOKIE_SECRET", self.neon_auth_cookie_secret),
+                    ("STACK_SECRET_SERVER_KEY", self.stack_secret_server_key),
+                    (
+                        "STACK_PUBLISHABLE_CLIENT_KEY",
+                        self.stack_publishable_client_key,
+                    ),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(
+                    f"AUTH_PROVIDER=neon requires all Neon Auth env vars; "
+                    f"missing: {', '.join(missing)}. See AUTH-6 / issue #61 for "
+                    "where these values come from (Neon Console)."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _refuse_non_ascii_in_secrets(self) -> Self:
+        # Defense-in-depth against paste-mishap bugs (the PR #50 `√` incident).
+        # Header-bound values MUST be ASCII or urllib3 raises UnicodeEncodeError
+        # at the first outbound HTTP call — invisible because background tasks
+        # swallow the error before it reaches the user.
+        header_bound_secrets = {
+            "RESEND_API_KEY": self.resend_api_key,
+            "STACK_SECRET_SERVER_KEY": self.stack_secret_server_key,
+            "STACK_PUBLISHABLE_CLIENT_KEY": self.stack_publishable_client_key,
+            "ANTHROPIC_API_KEY": self.anthropic_api_key,
+            "NEON_AUTH_COOKIE_SECRET": self.neon_auth_cookie_secret,
+        }
+        for name, value in header_bound_secrets.items():
+            if value and not value.isascii():
+                bad_char = next(c for c in value if ord(c) > 127)
+                raise ValueError(
+                    f"{name} contains non-ASCII char {bad_char!r} (likely a paste "
+                    "mishap — Word/clipboard autoformat introduces these silently). "
+                    "Re-copy the value from its source and re-set the secret."
+                )
         return self
 
 

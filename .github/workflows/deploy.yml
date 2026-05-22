@@ -187,6 +187,11 @@ jobs:
           #     sender, which can only deliver to the Resend account
           #     owner's address. Once a domain is verified at Resend,
           #     override this var with noreply@<verified-domain>.
+          # Neon Auth env vars (AUTH-7 / #62) are present for both auth
+          # providers. AUTH_PROVIDER selects which code path /login uses.
+          # Default 'resend' preserves current behavior; T12 / AUTH-18 (#73)
+          # flips production to 'neon' once the new path is dogfooded.
+          # Removal of the resend-path env vars happens in T13-C / AUTH-21.
           env_vars: |
             ENVIRONMENT=production
             DATABASE_URL=${{ secrets.PRODUCTION_DATABASE_URL }}
@@ -195,6 +200,12 @@ jobs:
             ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
             MAGIC_LINK_BASE_URL=${{ vars.MAGIC_LINK_BASE_URL || 'https://agile-flow-app-heo5ry7rua-uc.a.run.app' }}
             MAGIC_LINK_FROM_EMAIL=${{ vars.MAGIC_LINK_FROM_EMAIL || 'onboarding@resend.dev' }}
+            AUTH_PROVIDER=${{ vars.AUTH_PROVIDER || 'resend' }}
+            NEON_AUTH_BASE_URL=${{ secrets.NEON_AUTH_PROD_BASE_URL }}
+            NEON_AUTH_JWKS_URL=${{ secrets.NEON_AUTH_PROD_JWKS_URL }}
+            NEON_AUTH_COOKIE_SECRET=${{ secrets.NEON_AUTH_COOKIE_SECRET }}
+            STACK_SECRET_SERVER_KEY=${{ secrets.NEON_AUTH_PROD_SERVER_KEY }}
+            STACK_PUBLISHABLE_CLIENT_KEY=${{ secrets.NEON_AUTH_PROD_PUBLISHABLE_KEY }}
 
       - name: Route traffic to latest revision
         # success() gates on all prior steps succeeding — without it,

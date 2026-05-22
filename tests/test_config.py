@@ -151,3 +151,150 @@ def test_test_environment_allows_sqlite(monkeypatch: pytest.MonkeyPatch) -> None
 
     settings = Settings()
     assert settings.database_url == "sqlite://"
+
+
+# ── Neon Auth consistency validator (AUTH-7 / #62) ───────────────────
+
+
+def test_auth_provider_default_is_resend(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Backwards-compat: existing deploys without AUTH_PROVIDER set keep
+    # the Resend path. T12 (#71) flips production to "neon" by setting
+    # the repo variable; until then, omission must equal "resend".
+    monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+    from app.config import Settings
+
+    assert Settings().auth_provider == "resend"
+
+
+def test_auth_provider_invalid_value_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUTH_PROVIDER", "auth0")
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="AUTH_PROVIDER must be 'resend' or 'neon'"):
+        Settings()
+
+
+def test_auth_provider_neon_requires_all_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The migration-safety gate: flipping AUTH_PROVIDER=neon with any
+    # Neon Auth env var missing is a misconfiguration that would 500 on
+    # the first sign-in request. Refuse to start instead.
+    monkeypatch.setenv("AUTH_PROVIDER", "neon")
+    monkeypatch.delenv("NEON_AUTH_BASE_URL", raising=False)
+    monkeypatch.delenv("NEON_AUTH_JWKS_URL", raising=False)
+    monkeypatch.delenv("NEON_AUTH_COOKIE_SECRET", raising=False)
+    monkeypatch.delenv("STACK_SECRET_SERVER_KEY", raising=False)
+    monkeypatch.delenv("STACK_PUBLISHABLE_CLIENT_KEY", raising=False)
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="AUTH_PROVIDER=neon requires all Neon Auth env vars"):
+        Settings()
+
+
+def test_auth_provider_neon_partial_config_lists_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The error message must name the specific missing vars so operators
+    # don't have to bisect — `missing: STACK_SECRET_SERVER_KEY, ...`
+    # rather than a generic "config invalid".
+    monkeypatch.setenv("AUTH_PROVIDER", "neon")
+    monkeypatch.setenv("NEON_AUTH_BASE_URL", "https://example.neon.app")
+    monkeypatch.setenv("NEON_AUTH_JWKS_URL", "https://example.neon.app/.well-known/jwks.json")
+    monkeypatch.setenv("NEON_AUTH_COOKIE_SECRET", "test-cookie-secret-32-bytes-min-aaaa")
+    monkeypatch.delenv("STACK_SECRET_SERVER_KEY", raising=False)
+    monkeypatch.delenv("STACK_PUBLISHABLE_CLIENT_KEY", raising=False)
+    from app.config import Settings
+
+    with pytest.raises(
+        ValueError,
+        match=r"missing: STACK_SECRET_SERVER_KEY, STACK_PUBLISHABLE_CLIENT_KEY",
+    ):
+        Settings()
+
+
+def test_auth_provider_neon_with_all_vars_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUTH_PROVIDER", "neon")
+    monkeypatch.setenv("NEON_AUTH_BASE_URL", "https://example.neon.app")
+    monkeypatch.setenv("NEON_AUTH_JWKS_URL", "https://example.neon.app/.well-known/jwks.json")
+    monkeypatch.setenv("NEON_AUTH_COOKIE_SECRET", "test-cookie-secret-32-bytes-min-aaaa")
+    monkeypatch.setenv("STACK_SECRET_SERVER_KEY", "ssk_test_abcdef")
+    monkeypatch.setenv("STACK_PUBLISHABLE_CLIENT_KEY", "spk_test_abcdef")
+    from app.config import Settings
+
+    settings = Settings()
+    assert settings.auth_provider == "neon"
+    assert settings.neon_auth_jwks_url == "https://example.neon.app/.well-known/jwks.json"
+
+
+def test_auth_provider_resend_does_not_require_neon_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Default path: AUTH_PROVIDER=resend means the Neon Auth code path is
+    # never exercised, so its env vars don't need to be populated. This
+    # is what every existing deploy looks like prior to T12.
+    monkeypatch.setenv("AUTH_PROVIDER", "resend")
+    monkeypatch.delenv("NEON_AUTH_BASE_URL", raising=False)
+    monkeypatch.delenv("STACK_SECRET_SERVER_KEY", raising=False)
+    from app.config import Settings
+
+    settings = Settings()
+    assert settings.auth_provider == "resend"
+
+
+# ── Non-ASCII secret validator (defense against PR #50 paste-mishap) ─
+
+
+def test_resend_api_key_with_non_ascii_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    # PR #50 incident: a `√` character snuck into RESEND_API_KEY via
+    # Word-style clipboard autoformat. urllib3 raised UnicodeEncodeError
+    # at the first outbound HTTP call, but background-task wrapping
+    # swallowed the error — magic-link emails silently failed in prod.
+    # Refuse the value at startup instead.
+    monkeypatch.setenv("RESEND_API_KEY", "re_abc√def")
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="RESEND_API_KEY contains non-ASCII char"):
+        Settings()
+
+
+def test_neon_auth_cookie_secret_with_non_ascii_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEON_AUTH_COOKIE_SECRET", "secret-with-em-dash-—-inside")
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="NEON_AUTH_COOKIE_SECRET contains non-ASCII char"):
+        Settings()
+
+
+def test_stack_server_key_with_non_ascii_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STACK_SECRET_SERVER_KEY", "ssk_test_ñope")
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="STACK_SECRET_SERVER_KEY contains non-ASCII char"):
+        Settings()
+
+
+def test_empty_secrets_skip_ascii_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Empty values must not trigger the validator — the dev/test path
+    # leaves all five secrets empty and the validator should pass cleanly.
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("STACK_SECRET_SERVER_KEY", raising=False)
+    monkeypatch.delenv("STACK_PUBLISHABLE_CLIENT_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("NEON_AUTH_COOKIE_SECRET", raising=False)
+    from app.config import Settings
+
+    Settings()  # must not raise
+
+
+def test_ascii_secrets_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Happy path: realistic-shaped ASCII values across every guarded
+    # secret slot pass through cleanly.
+    monkeypatch.setenv("RESEND_API_KEY", "re_abcdef123456")
+    monkeypatch.setenv("STACK_SECRET_SERVER_KEY", "ssk_test_abcdef")
+    monkeypatch.setenv("STACK_PUBLISHABLE_CLIENT_KEY", "spk_test_abcdef")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-abcdef")
+    monkeypatch.setenv("NEON_AUTH_COOKIE_SECRET", "0123456789abcdef0123456789abcdef")
+    from app.config import Settings
+
+    Settings()  # must not raise
