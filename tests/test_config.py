@@ -95,6 +95,9 @@ def test_production_postgres_url_passes(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h.neon.tech/db")
     monkeypatch.setenv("SESSION_SECRET", "test-only-not-the-real-secret")
+    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "test-anon")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "test-service")
     from app.config import Settings
 
     settings = Settings()
@@ -122,6 +125,9 @@ def test_preview_postgres_url_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENVIRONMENT", "preview")
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h.neon.tech/preview-pr-1")
     monkeypatch.setenv("SESSION_SECRET", "test-only-not-the-real-secret")
+    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "test-anon")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "test-service")
     from app.config import Settings
 
     settings = Settings()

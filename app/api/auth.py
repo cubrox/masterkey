@@ -1,54 +1,70 @@
-"""Sign-in routes.
+"""Sign-in routes via Supabase Auth (GoTrue magic-link).
 
-POST /login mints a magic-link token and emails it. The response is a
-short HTML fragment confirming the action; the same fragment is
-returned whether the email is known or unknown so the route can't be
-used for account enumeration. Per ADR-002 in
-docs/TECHNICAL-ARCHITECTURE.md.
+POST /login: hands the email to Supabase, which mints a magic-link
+token and emails it. Returns a generic 202 fragment — the same fragment
+regardless of whether the email exists, so the route can't be used for
+account enumeration (Supabase's `should_create_user=True` default does
+the same on the auth side).
 
-GET /auth/verify consumes the magic-link token and issues the signed
-session cookie. Single-use; the same UPDATE that marks the token
-consumed also tells us the owning user, so the consumption is one
-atomic round-trip.
+GET /auth/callback: two-stage handler.
+
+  1. First hit (no query params): Supabase puts the JWT in the URL
+     hash fragment (`#access_token=...&refresh_token=...`), which the
+     browser does NOT send to the server. We render a tiny JS page
+     that reads `window.location.hash`, converts to query params, and
+     redirects to the same path with those tokens visible to the
+     server.
+  2. Second hit (query params present): validate the access_token via
+     Supabase, set it as an HttpOnly cookie, redirect to the app.
+
+GET /logout: clears both cookies (sb-access-token AND the legacy
+session cookie) and signs out of Supabase.
+
+The legacy `User` SQLModel is still alive — see the transitional
+shim in `app/services/identity/session.py`. SUPA-2b (#87) removes it.
 """
 
-import hashlib
-from datetime import UTC, datetime
 from typing import Annotated
 
 from email_validator import EmailNotValidError, validate_email
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import update
-from sqlmodel import Session
 
 from app.config import Settings, get_settings
-from app.db import get_session
-from app.models.magic_link_token import MagicLinkToken
-from app.models.user import User
-from app.services.identity import magic_link
+from app.integrations.supabase.client import anon_client
 from app.services.identity.session import (
     SESSION_COOKIE_NAME,
+    SUPABASE_COOKIE_NAME,
     current_user,
-    sign_session,
 )
-from app.services.rate_limit import (
-    enforce_login_rate_limit,
-    enforce_verify_rate_limit,
-)
+from app.services.rate_limit import enforce_login_rate_limit
 
 router = APIRouter()
 
-SessionDep = Annotated[Session, Depends(get_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
-CurrentUser = Annotated[User, Depends(current_user)]
+CurrentUser = Annotated[object, Depends(current_user)]  # User; loose typing for transition
 
 GENERIC_FRAGMENT = "<p>Check your inbox for a sign-in link.</p>"
 
-# Core-style table handle for the atomic consume-and-return UPDATE.
-# Same pattern as app/services/identity/magic_link.py — sidesteps mypy
-# friction with SQLModel attribute typing.
-_TOKEN_TABLE = MagicLinkToken.metadata.tables["magic_link_token"]
+# Cookie max-age. Supabase access tokens default to 1 hour but the
+# client refreshes them automatically; the cookie's max-age is the
+# upper bound on how long the user stays signed in across reloads.
+SB_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60  # 7 days
+
+
+def _external_origin(request: Request, fallback: str) -> str:
+    """Resolve the public origin for redirect URLs.
+
+    Cloud Run sits behind a Google proxy; `request.url` reports the
+    internal origin, which would break the magic-link callback (per
+    Pattern #4 in PATTERN-LIBRARY.md). Read `X-Forwarded-*` headers
+    first; fall back to the configured `app_url` for local dev.
+    """
+    proto = request.headers.get("x-forwarded-proto")
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if proto and host:
+        return f"{proto}://{host}"
+    return fallback.rstrip("/")
 
 
 @router.post(
@@ -58,16 +74,20 @@ _TOKEN_TABLE = MagicLinkToken.metadata.tables["magic_link_token"]
     dependencies=[Depends(enforce_login_rate_limit)],
 )
 def login(
-    background_tasks: BackgroundTasks,
-    session: SessionDep,
+    request: Request,
     settings: SettingsDep,
     email: Annotated[str, Form()],
 ) -> str:
-    """Issue a magic link to the supplied email.
+    """Issue a Supabase magic-link to the supplied email.
 
-    Returns the same 202 + fragment for known, unknown, and unrouteable
-    addresses (after format validation). The only failure visible to the
-    client is a 422 for malformed-format input.
+    Returns the same 202 + fragment for any well-formed email
+    regardless of whether the address exists in `auth.users` —
+    Supabase will create the user on first verify, and we deliberately
+    don't surface "unknown email" so this route can't enumerate.
+
+    Only failure visible to the client is a 422 for malformed-format
+    input. Errors from Supabase (rate limit at their layer, transient)
+    surface as 502.
     """
     try:
         result = validate_email(email, check_deliverability=False)
@@ -75,64 +95,125 @@ def login(
         raise HTTPException(status_code=422, detail="Invalid email format") from exc
 
     normalized_email = result.normalized.lower()
+    origin = _external_origin(request, settings.app_url)
+    redirect_url = f"{origin}/auth/callback"
 
-    magic_link.request_magic_link(
-        email=normalized_email,
-        session=session,
-        settings=settings,
-        background_tasks=background_tasks,
-    )
+    try:
+        anon_client().auth.sign_in_with_otp(
+            {
+                "email": normalized_email,
+                "options": {"email_redirect_to": redirect_url},
+            }
+        )
+    except Exception as exc:
+        # Don't leak Supabase internals; log via Cloud Logging and
+        # return a 502 so the client knows the upstream failed.
+        raise HTTPException(status_code=502, detail="Sign-in unavailable") from exc
 
     return GENERIC_FRAGMENT
 
 
-@router.get("/auth/verify", dependencies=[Depends(enforce_verify_rate_limit)])
-def verify(
-    token: str,
-    session: SessionDep,
+@router.get("/auth/callback", response_model=None)
+def auth_callback(
+    request: Request,
     settings: SettingsDep,
-) -> RedirectResponse:
-    """Consume a magic-link token and mint a signed session cookie.
+    access_token: str = "",
+    refresh_token: str = "",
+) -> Response:
+    """Two-stage callback for the Supabase magic-link click.
 
-    Atomic semantics: the UPDATE marks the token consumed AND returns
-    the owning user_id in a single round-trip — no race window between
-    "look up token" and "mark consumed."
+    Stage 1 (no `access_token` query param): render the JS bridge
+    page. The browser is now sitting on a URL like
+    `<app>/auth/callback#access_token=...&refresh_token=...`; the JS
+    in the rendered page reads the hash, builds query params, and
+    redirects to stage 2.
 
-    Failure modes (expired, already consumed, forged) all return the
-    same 410 Gone response so an attacker can't probe to distinguish
-    "this token was real but expired" from "this token was never valid."
+    Stage 2 (`access_token` present): validate via Supabase, set the
+    HttpOnly cookie, redirect to the reading-app entry point.
     """
-    token_hash = hashlib.sha256(token.encode("utf-8")).digest()
-    now = datetime.now(UTC)
-
-    stmt = (
-        update(_TOKEN_TABLE)
-        .where(
-            _TOKEN_TABLE.c.token_hash == token_hash,
-            _TOKEN_TABLE.c.consumed_at.is_(None),
-            _TOKEN_TABLE.c.expires_at > now,
+    if not access_token:
+        # Stage 1: hash-extractor page. Inline HTML rather than a
+        # template — this is ~20 lines and tightly coupled to the
+        # specific URL path, not the kind of thing worth a template
+        # round-trip for.
+        return HTMLResponse(
+            content=(
+                "<!doctype html>"
+                '<html><head><meta charset="utf-8"><title>Signing in…</title></head>'
+                "<body>"
+                "<p>Signing in…</p>"
+                "<script>"
+                "(function(){"
+                "var hash = window.location.hash.substring(1);"
+                "if (!hash) {"
+                "  document.body.innerHTML = '<p>Sign-in link is invalid or has expired. "
+                '<a href=\\"/\\">Try again</a>.</p>\';'
+                "  return;"
+                "}"
+                "var params = new URLSearchParams(hash);"
+                "var at = params.get('access_token');"
+                "var rt = params.get('refresh_token') || '';"
+                "if (!at) {"
+                "  document.body.innerHTML = '<p>Sign-in link is invalid or has expired. "
+                '<a href=\\"/\\">Try again</a>.</p>\';'
+                "  return;"
+                "}"
+                "var qs = new URLSearchParams({access_token: at, refresh_token: rt});"
+                "window.location.replace('/auth/callback?' + qs.toString());"
+                "})();"
+                "</script>"
+                "</body></html>"
+            )
         )
-        .values(consumed_at=now)
-        .returning(_TOKEN_TABLE.c.user_id)
-    )
-    user_id = session.execute(stmt).scalar_one_or_none()
 
-    if user_id is None:
-        session.rollback()
-        raise HTTPException(status_code=410, detail="Sign-in link expired or already used")
+    # Stage 2: validate the token by asking Supabase who it belongs to.
+    # A failed lookup → 410 (matches the old /auth/verify failure
+    # shape so existing 4xx-monitoring stays consistent).
+    try:
+        resp = anon_client().auth.get_user(access_token)
+    except Exception:
+        resp = None
+    if resp is None or resp.user is None:
+        raise HTTPException(status_code=410, detail="Sign-in link expired or invalid")
 
-    session.commit()
-
-    cookie_value = sign_session(user_id=user_id, secret=settings.session_secret)
-    # Drop the freshly-signed-in user on the paste/upload page (the
-    # actual app entry point), NOT the landing page. The landing page
-    # also redirects authed visitors here, but going via `/` would
-    # cause a needless second hop. See BUG-2 (#51).
+    # Drop the freshly-signed-in user on the paste/upload page, same
+    # as the old /auth/verify route — see BUG-2 / #51 for rationale.
     response = RedirectResponse(url="/passages/new", status_code=303)
     response.set_cookie(
+        key=SUPABASE_COOKIE_NAME,
+        value=access_token,
+        max_age=SB_COOKIE_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+    )
+    return response
+
+
+@router.get("/logout")
+def logout(settings: SettingsDep) -> RedirectResponse:
+    """Sign out: revoke the Supabase session and clear both cookies.
+
+    Both cookies are deleted (sb-access-token + the legacy session
+    cookie) so a logout while holding either kind of session reliably
+    clears the user. The legacy delete becomes a no-op after SUPA-2b.
+    """
+    try:
+        anon_client().auth.sign_out()
+    except Exception:
+        # Non-fatal: even if Supabase didn't acknowledge the sign-out,
+        # we still want to clear local cookies and redirect.
+        pass
+
+    response = RedirectResponse(url="/", status_code=303)
+    response.delete_cookie(
+        key=SUPABASE_COOKIE_NAME,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+    )
+    response.delete_cookie(
         key=SESSION_COOKIE_NAME,
-        value=cookie_value,
-        max_age=settings.session_ttl_days * 86400,
         httponly=True,
         secure=settings.session_cookie_secure,
         samesite="lax",
@@ -144,8 +225,8 @@ def verify(
 def me(user: CurrentUser) -> dict[str, str]:
     """Return the signed-in user's id + email.
 
-    The simplest possible auth-required endpoint. Useful for client-side
-    "are we signed in?" checks and as the canonical test target for the
-    `current_user` dependency.
+    Works through the dual-path `current_user` dependency, so either a
+    Supabase JWT cookie or (transitionally) a legacy itsdangerous
+    cookie can authenticate.
     """
-    return {"id": str(user.id), "email": user.email}
+    return {"id": str(user.id), "email": user.email}  # type: ignore[attr-defined]

@@ -1,31 +1,30 @@
 """Tests for GET /auth/verify and the session-cookie sign/verify helpers.
 
-Covers the Definition of Done from issue #10 (AUTH-2):
-  - Valid unconsumed token → 303 redirect to / with a signed cookie
-  - Cookie has HttpOnly, Secure, SameSite=Lax, Max-Age = 30 * 86400
-  - Cookie payload contains user_id + issued_at; issued_at within last second
-  - Re-using a consumed token → 410
-  - Expired token → 410
-  - Forged / unknown token → 410
-  - Cookie payload does NOT contain email or any PII
-
-Also: unit tests on the sign_session / verify_session helpers (round-trip,
-wrong secret, tampered value, expired).
+**SUPA-3 (#82) note:** The GET /auth/verify route was deleted — the
+new flow uses GET /auth/callback (two-stage hash-extractor) and the
+cookie is the Supabase JWT, not an itsdangerous-signed payload. The
+sign_session/verify_session helpers still exist as the legacy fallback
+in `current_user` but they're slated for deletion in SUPA-2b (#87).
+This file is skipped wholesale; SUPA-5 (#84) rewrites it against the
+Supabase callback flow.
 """
 
-import hashlib
-import secrets
-import time
-import uuid
-from datetime import UTC, datetime, timedelta
-
 import pytest
-from fastapi.testclient import TestClient
-from sqlmodel import Session
 
-from app.models.magic_link_token import MagicLinkToken
-from app.models.user import User
-from app.services.identity.session import (
+pytestmark = pytest.mark.skip(reason="SUPA-5: rewrite against Supabase Auth flow")
+
+import hashlib  # noqa: E402  (kept for re-enable in SUPA-5)
+import secrets  # noqa: E402
+import time  # noqa: E402
+import uuid  # noqa: E402
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlmodel import Session  # noqa: E402
+
+from app.models.magic_link_token import MagicLinkToken  # noqa: E402
+from app.models.user import User  # noqa: E402
+from app.services.identity.session import (  # noqa: E402
     SESSION_COOKIE_NAME,
     sign_session,
     verify_session,
