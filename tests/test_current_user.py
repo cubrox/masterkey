@@ -31,9 +31,7 @@ from app.models.user import User
 SUPABASE_COOKIE = "sb-access-token"
 
 
-def test_valid_supabase_jwt_returns_user_info(
-    client: TestClient, supabase_mock: MagicMock
-) -> None:
+def test_valid_supabase_jwt_returns_user_info(client: TestClient, supabase_mock: MagicMock) -> None:
     """The happy path. A valid Supabase JWT cookie → /api/me returns
     the user's id + email. The lazy mirror creates a corresponding
     Neon User row keyed on the Supabase user.id."""

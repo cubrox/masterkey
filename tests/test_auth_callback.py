@@ -45,30 +45,22 @@ def test_stage2_valid_token_sets_cookie_and_redirects(
     fake_user = SimpleNamespace(id="00000000-0000-0000-0000-000000000001", email="r@example.com")
     supabase_mock.auth.get_user.return_value = SimpleNamespace(user=fake_user)
 
-    response = client.get(
-        "/auth/callback?access_token=valid-jwt-token", follow_redirects=False
-    )
+    response = client.get("/auth/callback?access_token=valid-jwt-token", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/passages/new"
     assert response.cookies.get("sb-access-token") == "valid-jwt-token"
 
 
-def test_stage2_invalid_token_returns_410(
-    client: TestClient, supabase_mock: MagicMock
-) -> None:
+def test_stage2_invalid_token_returns_410(client: TestClient, supabase_mock: MagicMock) -> None:
     """Supabase says no user → 410 Gone. Same shape as the old
     /auth/verify failure mode so existing 4xx monitoring stays
     consistent."""
     supabase_mock.auth.get_user.return_value = SimpleNamespace(user=None)
-    response = client.get(
-        "/auth/callback?access_token=expired-or-forged", follow_redirects=False
-    )
+    response = client.get("/auth/callback?access_token=expired-or-forged", follow_redirects=False)
     assert response.status_code == 410
 
 
-def test_stage2_supabase_raise_returns_410(
-    client: TestClient, supabase_mock: MagicMock
-) -> None:
+def test_stage2_supabase_raise_returns_410(client: TestClient, supabase_mock: MagicMock) -> None:
     """If supabase-py raises (network, malformed JWT) we treat it the
     same as 'no user' — the user can't sign in either way."""
     supabase_mock.auth.get_user.side_effect = RuntimeError("network")
@@ -76,9 +68,7 @@ def test_stage2_supabase_raise_returns_410(
     assert response.status_code == 410
 
 
-def test_cookie_is_httponly_and_samesite_lax(
-    client: TestClient, supabase_mock: MagicMock
-) -> None:
+def test_cookie_is_httponly_and_samesite_lax(client: TestClient, supabase_mock: MagicMock) -> None:
     """Cookie attributes that actually matter for the security model.
     Secure-flag depends on settings.session_cookie_secure which is
     True by default (production) — TestClient may strip Secure on
@@ -87,18 +77,14 @@ def test_cookie_is_httponly_and_samesite_lax(
     fake_user = SimpleNamespace(id="00000000-0000-0000-0000-000000000002", email="r@example.com")
     supabase_mock.auth.get_user.return_value = SimpleNamespace(user=fake_user)
 
-    response = client.get(
-        "/auth/callback?access_token=valid", follow_redirects=False
-    )
+    response = client.get("/auth/callback?access_token=valid", follow_redirects=False)
     set_cookie = response.headers.get("set-cookie", "")
     assert "sb-access-token=valid" in set_cookie
     assert "HttpOnly" in set_cookie
     assert "SameSite=lax" in set_cookie.replace(" ", "")
 
 
-def test_cookie_max_age_is_seven_days(
-    client: TestClient, supabase_mock: MagicMock
-) -> None:
+def test_cookie_max_age_is_seven_days(client: TestClient, supabase_mock: MagicMock) -> None:
     """7 days = 604800 seconds. Pinned because changing this without
     thought has UX consequences (sudden re-login wave)."""
     fake_user = SimpleNamespace(id="00000000-0000-0000-0000-000000000003", email="r@example.com")

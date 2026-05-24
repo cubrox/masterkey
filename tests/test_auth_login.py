@@ -78,9 +78,7 @@ def test_redirect_url_uses_x_forwarded_headers_when_present(
     assert redirect == "https://pr-42---agile-flow-app-xyz.run.app/auth/callback"
 
 
-def test_supabase_upstream_error_returns_502(
-    client: TestClient, supabase_mock: MagicMock
-) -> None:
+def test_supabase_upstream_error_returns_502(client: TestClient, supabase_mock: MagicMock) -> None:
     """If Supabase raises (network, rate limit, etc.), surface a 502 so
     monitoring distinguishes upstream-failure from our-bug."""
     supabase_mock.auth.sign_in_with_otp.side_effect = RuntimeError("supabase down")
