@@ -1,28 +1,25 @@
 """Tests for POST /login and the magic-link request flow.
 
-Covers the Definition of Done from issue #9 (AUTH-1):
-  - Valid email → 202 + generic fragment
-  - A MagicLinkToken row is created with consumed_at NULL and expires_at
-    ≈ 15 minutes ahead
-  - The token hash stored in the DB is NOT the raw token sent in the email
-  - Re-issuing for the same email invalidates the prior token (one row
-    with consumed_at IS NULL)
-  - Response is identical for known vs. unknown emails (no enumeration)
-  - Malformed email → 422 (FastAPI validation)
-
-The Resend SDK is monkey-patched. The real API is never called from CI.
+**SUPA-3 (#82) note:** This entire file tests the pre-Supabase magic-link
+flow that no longer exists in production. POST /login now calls
+`supabase.auth.sign_in_with_otp(...)` and there is no `MagicLinkToken`
+row created — Supabase owns the token. The file is skipped wholesale
+here; SUPA-5 (#84) rewrites it against the Supabase Auth flow.
 """
 
-import hashlib
-from datetime import UTC, datetime, timedelta
-
 import pytest
-from fastapi.testclient import TestClient
-from sqlmodel import Session, select
 
-from app.models.magic_link_token import MagicLinkToken
-from app.models.user import User
-from app.services.identity import magic_link
+pytestmark = pytest.mark.skip(reason="SUPA-5: rewrite against Supabase Auth flow")
+
+import hashlib  # noqa: E402  (kept for re-enable in SUPA-5)
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlmodel import Session, select  # noqa: E402
+
+from app.models.magic_link_token import MagicLinkToken  # noqa: E402
+from app.models.user import User  # noqa: E402
+from app.services.identity import magic_link  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

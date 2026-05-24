@@ -1,15 +1,17 @@
 """Session cookie sign + verify helpers + current_user dependency.
 
-Per ADR-002 in docs/TECHNICAL-ARCHITECTURE.md, sessions are stored as
-signed cookies — no server-side session table. The cookie payload is
-deliberately minimal: just `user_id` and `issued_at`. The user's email
-and any other PII is loaded from the DB on every request via the
-`current_user` dependency below.
+**Transitional state (SUPA-3, #82):** `current_user` is now dual-path.
+It first checks the Supabase JWT cookie (`sb-access-token`) and, if
+that's valid, returns a lazily-mirrored `User` row whose primary key
+matches the Supabase `auth.users.id`. If no Supabase cookie is present
+(or it's invalid), it falls back to the legacy itsdangerous-signed
+cookie. The legacy path stays alive so the test suite (which sets
+`sign_session(...)` cookies directly) keeps working until SUPA-5
+rewrites it. SUPA-2b (#87) deletes the legacy path entirely.
 
-`itsdangerous.URLSafeTimedSerializer` does the signing. The serializer
-is salted with a stable, version-tagged string so future cookie kinds
-(CSRF, remember-me, etc.) can share the same SESSION_SECRET without
-their tokens being interchangeable.
+The legacy half — `sign_session`, `verify_session`, the
+`itsdangerous`-based payload, and the `_legacy_current_user` helper —
+is preserved verbatim from the ADR-002 implementation.
 """
 
 import uuid
@@ -18,6 +20,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, Request, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from app.config import Settings, get_settings
@@ -26,6 +29,7 @@ from app.models.user import User
 
 SESSION_COOKIE_NAME = "session"
 SESSION_SALT = "cubrox-session-cookie-v1"
+SUPABASE_COOKIE_NAME = "sb-access-token"
 
 # A cookie older than this gets re-issued with a fresh issued_at on the
 # next authenticated request. The cookie's max_age stays at the full
@@ -79,6 +83,36 @@ def verify_session(*, value: str, secret: str, max_age_seconds: int) -> dict[str
     return payload
 
 
+def _ensure_neon_user_mirror(*, supabase_user_id: str, email: str, session: Session) -> User:
+    """Return the Neon `User` row whose PK matches the Supabase user id.
+
+    Lazy-create the row if it doesn't exist yet (first time we see a
+    given Supabase user). Race-safe via `IntegrityError` rollback +
+    re-fetch — two concurrent first-requests for the same user can't
+    both insert. This is the shim that lets the rest of the app keep
+    using the legacy `User` SQLModel while auth is sourced from
+    Supabase; SUPA-2b deletes both the model and this helper.
+    """
+    user_id = uuid.UUID(supabase_user_id)
+    existing = session.get(User, user_id)
+    if existing is not None:
+        return existing
+    mirror = User(id=user_id, email=email)
+    session.add(mirror)
+    try:
+        session.commit()
+        session.refresh(mirror)
+        return mirror
+    except IntegrityError:
+        session.rollback()
+        racer = session.get(User, user_id)
+        if racer is not None:
+            return racer
+        # Extremely unlikely — IntegrityError without the row being there
+        # would mean a constraint violation other than the PK race.
+        raise UnauthenticatedError() from None
+
+
 def current_user(
     request: Request,
     response: Response,
@@ -87,22 +121,61 @@ def current_user(
 ) -> User:
     """FastAPI dependency that resolves the request's signed-in user.
 
-    Reads the `session` cookie, verifies it, loads the User row, and
-    returns the User. On ANY failure (no cookie, bad signature, expired
-    cookie, user_id no longer exists in DB), raises
-    `UnauthenticatedError` — which the app-level exception handler
-    converts to the right redirect for browser vs. HTMX requests.
+    **Dual-path (SUPA-3 transitional):**
 
-    Side effect: if the cookie is older than `SESSION_REISSUE_AFTER_DAYS`,
-    schedules a fresh `Set-Cookie` on the response. The user's effective
-    session extends as long as they keep using the app.
+    1. If the request has a Supabase JWT cookie (`sb-access-token`),
+       validate it via Supabase Auth and return a lazily-mirrored Neon
+       `User` row. This is the production path.
+    2. Otherwise, fall back to the legacy itsdangerous-signed `session`
+       cookie. This path keeps existing tests and any in-flight
+       pre-cutover sessions working until SUPA-2b (#87) deletes it.
 
-    Usage:
-        from app.services.identity.session import current_user
-        CurrentUser = Annotated[User, Depends(current_user)]
+    Either path raising → `UnauthenticatedError`, caught by the
+    app-level handler in `app/main.py` for the redirect.
+    """
+    sb_token = request.cookies.get(SUPABASE_COOKIE_NAME)
+    if sb_token:
+        # Local import — avoid pulling the supabase package at module
+        # import time so the tests that don't touch auth don't pay the
+        # import cost, and so a missing SUPABASE_URL in dev doesn't
+        # crash the whole import graph.
+        from app.integrations.supabase.client import anon_client  # noqa: PLC0415
 
-        @router.get("/protected")
-        def view(user: CurrentUser): ...
+        try:
+            sb_resp = anon_client().auth.get_user(sb_token)
+        except Exception:
+            sb_resp = None
+        if sb_resp is not None and sb_resp.user is not None and sb_resp.user.email:
+            return _ensure_neon_user_mirror(
+                supabase_user_id=sb_resp.user.id,
+                email=sb_resp.user.email,
+                session=session,
+            )
+        # sb-access-token was present but invalid — fall through to
+        # the legacy path. In steady-state production this is the
+        # signal to raise; we keep falling through during transition
+        # so that the legacy cookie still works if the user has both.
+
+    return _legacy_current_user(
+        request=request,
+        response=response,
+        session=session,
+        settings=settings,
+    )
+
+
+def _legacy_current_user(
+    *,
+    request: Request,
+    response: Response,
+    session: Session,
+    settings: Settings,
+) -> User:
+    """Original itsdangerous-signed-cookie auth path.
+
+    Preserved verbatim from the pre-SUPA-3 implementation. Used as the
+    fallback in `current_user` and removed entirely in SUPA-2b (#87)
+    once tests are rewritten in SUPA-5.
     """
     cookie_value = request.cookies.get(SESSION_COOKIE_NAME)
     if cookie_value is None:

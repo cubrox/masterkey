@@ -38,9 +38,24 @@ class Settings(BaseSettings):
     # via Secret Manager. The dev default is the literal string "dev-only"
     # so tests can run with no env setup; the validator below refuses this
     # default in non-dev environments.
+    #
+    # SUPA-3 deprecation: `session_secret` and `session_ttl_days` only
+    # apply to the legacy itsdangerous fallback in
+    # app/services/identity/session.py; the Supabase JWT path doesn't
+    # use them. SUPA-2b (#87) removes both fields when the fallback is
+    # deleted. `session_cookie_secure` survives — it gates the
+    # `sb-access-token` cookie's Secure flag too.
     session_secret: str = "dev-only"
     session_ttl_days: int = 30
     session_cookie_secure: bool = True
+
+    # Supabase (SUPA-1/2/3). Required in non-dev environments so the
+    # auth flow + future RLS-aware queries work. Empty defaults so the
+    # test suite can run without env setup (the legacy auth path
+    # services every test).
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_service_key: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -91,6 +106,23 @@ class Settings(BaseSettings):
                 "print(secrets.token_urlsafe(32))'`) and set as a Cloud Run env "
                 "var (production reads from the SESSION_SECRET secret in Secret "
                 "Manager). Without this, every session cookie is forgeable."
+            )
+        # SUPA-3: production must have Supabase credentials wired or
+        # the new auth flow can't issue magic links / validate JWTs.
+        missing_sb = [
+            name
+            for name, value in (
+                ("SUPABASE_URL", self.supabase_url),
+                ("SUPABASE_ANON_KEY", self.supabase_anon_key),
+                ("SUPABASE_SERVICE_KEY", self.supabase_service_key),
+            )
+            if not value
+        ]
+        if missing_sb:
+            raise ValueError(
+                f"{', '.join(missing_sb)} missing in {self.environment}. "
+                "Set on Cloud Run via Secret Manager mounts "
+                "(supabase-url, supabase-anon-key, supabase-service-key)."
             )
         return self
 

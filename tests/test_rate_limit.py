@@ -214,6 +214,7 @@ def test_rate_limit_log_hashes_the_email(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(reason="SUPA-3: /auth/verify route deleted; rewrite for /auth/callback in SUPA-5")
 def test_verify_route_rate_limits_by_ip(
     client: TestClient, fake_clock: dict[str, datetime]
 ) -> None:
