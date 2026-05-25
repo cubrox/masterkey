@@ -48,6 +48,7 @@
 22. [GitHub Actions: CI Checks Not Attaching to PR](#22-github-actions-ci-checks-not-attaching-to-pr)
 23. [GitHub Actions: Reusable Workflow Missing workflow_call](#23-github-actions-reusable-workflow-missing-workflow_call)
 33. [GitHub Actions: Silent-Skip Cascade in `if:` Guards](#33-github-actions-silent-skip-cascade-in-if-guards)
+34. [GitHub Actions: Workflow Pushes With `GITHUB_TOKEN` Don't Re-Trigger CI](#34-github-actions-workflow-pushes-with-github_token-dont-re-trigger-ci)
 
 ### GitHub Platform
 
@@ -1326,3 +1327,63 @@ single CI run had failed loud at the missing output. Conversion to
 fail-loud is therefore a *retroactive* defense: it doesn't fix the
 specific bugs the cascade hid, but it ensures the next bug surfaces
 within one run instead of months.
+
+## 34. GitHub Actions: Workflow Pushes With `GITHUB_TOKEN` Don't Re-Trigger CI
+
+**Gotcha:** A GitHub Actions workflow that pushes commits back to a PR
+branch using the default `GITHUB_TOKEN` (`${{ github.token }}`,
+`${{ secrets.GITHUB_TOKEN }}`) does NOT re-trigger any workflows on
+that new commit. GitHub does this deliberately to prevent infinite
+loops (workflow → push → workflow → push → …). The auto-pushed commit
+lands on the PR HEAD with **zero CI runs**, and the merge button
+becomes grayed out because GitHub thinks the new SHA has unverified
+checks.
+
+Symptoms when this happens:
+
+- PR shows `mergeable: MERGEABLE` but `mergeStateStatus: BLOCKED`
+- All check runs visible on the PR are from a *prior* SHA, not the
+  current HEAD
+- The "Auto Fix" / linter / formatter workflow ran successfully and
+  pushed a `style: …` commit, but no follow-up CI run appears
+
+**Three fixes:**
+
+1. **Delete the auto-push workflow entirely** — if the auto-fix is
+   redundant with a check that already runs in your main CI workflow
+   (e.g. `ruff check .` covers what `ruff --fix` was rewriting), the
+   auto-fix layer is pure overhead. The dev gets the same coverage via
+   the pre-push hook + main CI lint check.
+2. **Switch to a PAT** — replace `${{ github.token }}` with a
+   Personal Access Token from a bot account
+   (`${{ secrets.VA_WORKER_PAT }}`). The PAT-signed push isn't subject
+   to the loop-prevention rule, so CI re-triggers normally. Cost:
+   another secret to manage + rotate.
+3. **Make the workflow `--check`-only** — fail the PR when fixes are
+   needed instead of auto-applying them. The dev runs the fixer
+   locally and pushes the result themselves (signed with their own
+   identity, which DOES re-trigger CI).
+
+**Cubrox chose (1):** `.github/workflows/auto-fix.yml` was deleted in
+SUPA-#93 because `ci.yml`'s `python` job already runs
+`uv run ruff check .` and fails the PR on violations. The dev workflow
+(`uv run ruff check . --fix` locally) is unchanged; the pre-push hook
+catches anything that slips.
+
+**Escape hatch when you hit a BLOCKED PR:** push an empty commit to
+re-trigger CI on the current HEAD:
+
+```bash
+git commit --allow-empty -m "ci: trigger CI on auto-fix HEAD"
+git push
+```
+
+The empty commit gets signed by your own identity (not `GITHUB_TOKEN`),
+which fires every workflow normally. The merge button unblocks within
+a few minutes.
+
+Reference: GitHub docs at
+https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#using-the-github_token-in-a-workflow
+("when you use the repository's `GITHUB_TOKEN` to perform tasks,
+events triggered by the `GITHUB_TOKEN` … will not create a new
+workflow run").
