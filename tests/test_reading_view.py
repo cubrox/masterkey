@@ -34,9 +34,11 @@ ALL_CSS_VAR_NAMES = (
 )
 
 
-def _make_passage(session: Session, user_id: uuid.UUID, text: str = "The hidden words.") -> Passage:
+def _make_passage(
+    session: Session, owner_id: uuid.UUID, text: str = "The hidden words."
+) -> Passage:
     p = Passage(
-        user_id=user_id,
+        owner_id=owner_id,
         text=text,
         text_hash=hashlib.sha256(text.encode("utf-8")).digest(),
         source_type="paste",
@@ -138,7 +140,7 @@ def test_user_with_preference_row_gets_their_values_rendered(
 
     session.add(
         Preference(
-            user_id=user.id,
+            owner_id=user.id,
             values={"size": "24px", "max_width": "55ch"},
             updated_at=datetime.now(UTC),
         )

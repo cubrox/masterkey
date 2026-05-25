@@ -46,10 +46,10 @@ def stub_anthropic_client() -> Any:
 
 
 def _make_passage(
-    session: Session, user_id: uuid.UUID, text: str = "A passage of text."
+    session: Session, owner_id: uuid.UUID, text: str = "A passage of text."
 ) -> Passage:
     p = Passage(
-        user_id=user_id,
+        owner_id=owner_id,
         text=text,
         text_hash=hashlib.sha256(text.encode("utf-8")).digest(),
         source_type="paste",

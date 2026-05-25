@@ -25,10 +25,10 @@ from app.models.preference import Preference
 from tests.conftest import signed_in
 
 
-def _make_passage(session: Session, user_id: uuid.UUID) -> Passage:
+def _make_passage(session: Session, owner_id: uuid.UUID) -> Passage:
     text = "test passage"
     p = Passage(
-        user_id=user_id,
+        owner_id=owner_id,
         text=text,
         text_hash=hashlib.sha256(text.encode("utf-8")).digest(),
         source_type="paste",

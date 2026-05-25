@@ -17,18 +17,17 @@ soft-auth `try_current_user` dependency returns `None` rather than
 raising when no valid session is present.
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse, Response
 
-from app.models.user import User
-from app.services.identity.session import try_current_user
+from app.integrations.supabase.auth import try_current_user
 from app.templates import templates
 
 router = APIRouter()
 
-OptionalUser = Annotated[User | None, Depends(try_current_user)]
+OptionalUser = Annotated[Any | None, Depends(try_current_user)]
 
 
 @router.get("/")

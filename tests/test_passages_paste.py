@@ -49,7 +49,7 @@ def test_passage_row_has_correct_fields(client: TestClient, session: Session) ->
     passages = session.exec(select(Passage)).all()
     assert len(passages) == 1
     p = passages[0]
-    assert p.user_id == user.id
+    assert p.owner_id == user.id
     assert p.text == text
     assert p.source_type == "paste"
     assert p.source_filename is None
@@ -141,7 +141,7 @@ def test_same_text_from_two_users_creates_two_distinct_rows(
 
     passages = session.exec(select(Passage)).all()
     assert len(passages) == 2
-    assert {p.user_id for p in passages} == {user_a.id, user_b.id}
+    assert {p.owner_id for p in passages} == {user_a.id, user_b.id}
     # Both rows share the same text_hash (the cache lookup key).
     assert passages[0].text_hash == passages[1].text_hash
 
