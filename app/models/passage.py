@@ -9,6 +9,11 @@ by two different users hits the same cached questions.
 `source_type` is constrained to `'paste' | 'pdf'`. `source_filename` is
 populated only for PDF uploads (kept for display, never re-read from
 disk — the parsed text is the source of truth post-ingestion).
+
+`owner_id` references `auth.users(id)` in Supabase. The FK constraint
+lives in the SQL migration (supabase/migrations/*.sql), not on the
+SQLModel field — `auth.users` is in a different schema and isn't a
+SQLModel-managed table.
 """
 
 import uuid
@@ -21,7 +26,7 @@ class Passage(SQLModel, table=True):
     __tablename__ = "passage"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    user_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
+    owner_id: uuid.UUID = Field(nullable=False)
     text: str
     text_hash: bytes
     source_type: str

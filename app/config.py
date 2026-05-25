@@ -19,14 +19,6 @@ class Settings(BaseSettings):
     app_url: str = "http://localhost:8080"
     environment: str = "development"
 
-    # Magic-link sign-in (ADR-002). RESEND_API_KEY is required in any
-    # environment where /login is exercised; the Settings validator below
-    # gates non-dev environments. The base URL and from-email default to
-    # values safe for local dev so the test suite needs no env setup.
-    resend_api_key: str = ""
-    magic_link_base_url: str = "http://localhost:8080"
-    magic_link_from_email: str = "onboarding@resend.dev"
-
     # Anthropic LLM (ADR-001). Used by app/services/comprehension/generator.py
     # to generate reading-comprehension questions. The route layer that
     # consumes this builds the client lazily so missing config doesn't
@@ -34,19 +26,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-4-5"
 
-    # Session cookie signing (AUTH-2). 32+ random bytes, set per environment
-    # via Secret Manager. The dev default is the literal string "dev-only"
-    # so tests can run with no env setup; the validator below refuses this
-    # default in non-dev environments.
-    #
-    # SUPA-3 deprecation: `session_secret` and `session_ttl_days` only
-    # apply to the legacy itsdangerous fallback in
-    # app/services/identity/session.py; the Supabase JWT path doesn't
-    # use them. SUPA-2b (#87) removes both fields when the fallback is
-    # deleted. `session_cookie_secure` survives — it gates the
-    # `sb-access-token` cookie's Secure flag too.
-    session_secret: str = "dev-only"
-    session_ttl_days: int = 30
+    # Gates the `Secure` flag on the `sb-access-token` cookie that
+    # `/auth/callback` sets. True in production / preview; tests and
+    # local dev override to False via env.
     session_cookie_secure: bool = True
 
     # Supabase (SUPA-1/2/3). Required in non-dev environments so the
@@ -98,14 +80,6 @@ class Settings(BaseSettings):
                 "DATABASE_URL env var didn't override the dev default — for "
                 "previews, NEON_API_KEY may be unconfigured so the Neon branch "
                 "step was skipped."
-            )
-        if self.session_secret in ("", "dev-only"):
-            raise ValueError(
-                f"SESSION_SECRET is the dev default or empty in {self.environment}. "
-                "Generate 32+ random bytes (e.g. `python -c 'import secrets; "
-                "print(secrets.token_urlsafe(32))'`) and set as a Cloud Run env "
-                "var (production reads from the SESSION_SECRET secret in Secret "
-                "Manager). Without this, every session cookie is forgeable."
             )
         # SUPA-3: production must have Supabase credentials wired or
         # the new auth flow can't issue magic links / validate JWTs.

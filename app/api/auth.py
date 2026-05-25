@@ -31,12 +31,8 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.config import Settings, get_settings
+from app.integrations.supabase.auth import SUPABASE_COOKIE_NAME, current_user
 from app.integrations.supabase.client import anon_client
-from app.services.identity.session import (
-    SESSION_COOKIE_NAME,
-    SUPABASE_COOKIE_NAME,
-    current_user,
-)
 from app.services.rate_limit import enforce_login_rate_limit
 
 router = APIRouter()
@@ -192,28 +188,17 @@ def auth_callback(
 
 @router.get("/logout")
 def logout(settings: SettingsDep) -> RedirectResponse:
-    """Sign out: revoke the Supabase session and clear both cookies.
-
-    Both cookies are deleted (sb-access-token + the legacy session
-    cookie) so a logout while holding either kind of session reliably
-    clears the user. The legacy delete becomes a no-op after SUPA-2b.
-    """
+    """Sign out: revoke the Supabase session and clear the cookie."""
     try:
         anon_client().auth.sign_out()
     except Exception:
         # Non-fatal: even if Supabase didn't acknowledge the sign-out,
-        # we still want to clear local cookies and redirect.
+        # we still want to clear the local cookie and redirect.
         pass
 
     response = RedirectResponse(url="/", status_code=303)
     response.delete_cookie(
         key=SUPABASE_COOKIE_NAME,
-        httponly=True,
-        secure=settings.session_cookie_secure,
-        samesite="lax",
-    )
-    response.delete_cookie(
-        key=SESSION_COOKIE_NAME,
         httponly=True,
         secure=settings.session_cookie_secure,
         samesite="lax",

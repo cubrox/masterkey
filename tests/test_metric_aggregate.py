@@ -11,6 +11,7 @@ Covers the Definition of Done from issue #23:
 
 import hashlib
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -19,23 +20,19 @@ from sqlmodel import Session
 
 from app.models.passage import Passage
 from app.models.reading_event import ReadingEvent
-from app.models.user import User
 from app.scripts import metric as metric_cli
 from app.services.metric.aggregate import (
     lines_per_day_since,
     total_lines_since,
 )
+from tests.conftest import make_user
 
 
-def _seed_user_and_passage(session: Session) -> tuple[User, Passage]:
-    user = User(email="metric-reader@example.com")
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-
+def _seed_user_and_passage(session: Session) -> tuple[SimpleNamespace, Passage]:
+    user = make_user(session, email="metric-reader@example.com")
     text = "lorem ipsum"
     p = Passage(
-        user_id=user.id,
+        owner_id=user.id,
         text=text,
         text_hash=hashlib.sha256(text.encode()).digest(),
         source_type="paste",
@@ -57,7 +54,7 @@ def _seed_events(
     for occurred_at, lines in rows:
         session.add(
             ReadingEvent(
-                user_id=user.id,
+                owner_id=user.id,
                 passage_id=passage.id,
                 lines_processed=lines,
                 occurred_at=occurred_at,

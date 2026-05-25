@@ -13,12 +13,14 @@ Design choices:
   - `occurred_at` is server-defaulted to `now()` so the writer in
     METRIC-2 can rely on the database's clock (consistent across
     Cloud Run instances).
-  - CASCADE on both FKs: deleting a user or a passage takes their
-    reading events too — orphan rows have no meaning.
+  - `owner_id` references `auth.users(id)` in Supabase — FK lives in
+    the SQL migration, not on the SQLModel field (auth schema is
+    cross-schema and not SQLModel-managed).
+  - `passage_id` keeps its SQLModel FK to the local `passage` table.
 
 Indexes:
   - `ix_reading_event_occurred_at` for the date-range aggregate in
-    METRIC-3. No composite (user_id, occurred_at) index yet — the
+    METRIC-3. No composite (owner_id, occurred_at) index yet — the
     aggregate is cross-user, and adding indexes ahead of an
     observed query is premature.
 """
@@ -35,7 +37,7 @@ class ReadingEvent(SQLModel, table=True):
     # Mirror the migration's CHECK constraint here too so
     # `SQLModel.metadata.create_all` (used by the test conftest) also
     # enforces the >=1 invariant. Without this, the tests would see a
-    # 0-line row succeed even though Alembic-managed Postgres rejects it.
+    # 0-line row succeed even though Supabase-managed Postgres rejects it.
     __table_args__ = (
         sa.CheckConstraint(
             "lines_processed >= 1",
@@ -44,7 +46,7 @@ class ReadingEvent(SQLModel, table=True):
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    user_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
+    owner_id: uuid.UUID = Field(nullable=False)
     passage_id: uuid.UUID = Field(foreign_key="passage.id", nullable=False)
     lines_processed: int = Field(nullable=False)
     # Python-side default mirrors the migration's `server_default=now()`.

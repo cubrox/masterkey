@@ -22,10 +22,10 @@ from tests.conftest import make_user, signed_in
 
 
 def _make_passage(
-    session: Session, user_id: uuid.UUID, text: str = "Some lines\nto read."
+    session: Session, owner_id: uuid.UUID, text: str = "Some lines\nto read."
 ) -> Passage:
     p = Passage(
-        user_id=user_id,
+        owner_id=owner_id,
         text=text,
         text_hash=hashlib.sha256(text.encode("utf-8")).digest(),
         source_type="paste",
@@ -54,7 +54,7 @@ def test_close_inserts_reading_event_and_returns_204(client: TestClient, session
     rows = session.exec(select(ReadingEvent)).all()
     assert len(rows) == 1
     row = rows[0]
-    assert row.user_id == user.id
+    assert row.owner_id == user.id
     assert row.passage_id == passage.id
     assert row.lines_processed == 42
 

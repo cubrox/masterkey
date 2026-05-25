@@ -15,23 +15,22 @@ bytes — the cache is keyed on what the user reads, not how it arrived.
 """
 
 import hashlib
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlmodel import Session
 
 from app.db import get_session
+from app.integrations.supabase.auth import current_user
 from app.models.passage import Passage
-from app.models.user import User
-from app.services.identity.session import current_user
 from app.services.ingestion.pdf import EmptyPdfTextError, PdfParseError, extract_text
 from app.templates import templates
 
 router = APIRouter()
 
 SessionDep = Annotated[Session, Depends(get_session)]
-CurrentUser = Annotated[User, Depends(current_user)]
+CurrentUser = Annotated[Any, Depends(current_user)]
 
 # Hard ceiling on a single passage. ~100k chars is around 4k lines of
 # regular prose — enough for a chapter-length excerpt, far enough below
@@ -82,7 +81,7 @@ def create_passage(
 
     text_hash = hashlib.sha256(text.encode("utf-8")).digest()
     passage = Passage(
-        user_id=user.id,
+        owner_id=user.id,
         text=text,
         text_hash=text_hash,
         source_type="paste",
@@ -144,7 +143,7 @@ async def create_passage_from_pdf(
 
     text_hash = hashlib.sha256(text.encode("utf-8")).digest()
     passage = Passage(
-        user_id=user.id,
+        owner_id=user.id,
         text=text,
         text_hash=text_hash,
         source_type="pdf",

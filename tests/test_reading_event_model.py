@@ -9,6 +9,7 @@ test engine does not enforce FKs.
 import time
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 import sqlalchemy.exc
@@ -16,17 +17,13 @@ from sqlmodel import Session, select
 
 from app.models.passage import Passage
 from app.models.reading_event import ReadingEvent
-from app.models.user import User
+from tests.conftest import make_user
 
 
-def _seed_user_and_passage(session: Session) -> tuple[User, Passage]:
-    user = User(email="reader@example.com")
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-
+def _seed_user_and_passage(session: Session) -> tuple[SimpleNamespace, Passage]:
+    user = make_user(session, email="reader@example.com")
     passage = Passage(
-        user_id=user.id,
+        owner_id=user.id,
         text="lorem ipsum",
         text_hash=b"\x00" * 32,
         source_type="paste",
@@ -41,7 +38,7 @@ def test_insert_and_select_roundtrip(session: Session) -> None:
     user, passage = _seed_user_and_passage(session)
 
     event = ReadingEvent(
-        user_id=user.id,
+        owner_id=user.id,
         passage_id=passage.id,
         lines_processed=42,
     )
@@ -51,7 +48,7 @@ def test_insert_and_select_roundtrip(session: Session) -> None:
     rows = session.exec(select(ReadingEvent)).all()
     assert len(rows) == 1
     saved = rows[0]
-    assert saved.user_id == user.id
+    assert saved.owner_id == user.id
     assert saved.passage_id == passage.id
     assert saved.lines_processed == 42
 
@@ -65,7 +62,7 @@ def test_occurred_at_defaults_to_now_when_unset(session: Session) -> None:
     before = datetime.now(UTC)
     time.sleep(0.001)  # ensure default is strictly between before/after
 
-    event = ReadingEvent(user_id=user.id, passage_id=passage.id, lines_processed=1)
+    event = ReadingEvent(owner_id=user.id, passage_id=passage.id, lines_processed=1)
     session.add(event)
     session.commit()
     session.refresh(event)
@@ -85,7 +82,7 @@ def test_lines_processed_zero_is_rejected(session: Session) -> None:
     surfaces from the DB at commit time as IntegrityError."""
     user, passage = _seed_user_and_passage(session)
 
-    event = ReadingEvent(user_id=user.id, passage_id=passage.id, lines_processed=0)
+    event = ReadingEvent(owner_id=user.id, passage_id=passage.id, lines_processed=0)
     session.add(event)
     with pytest.raises(sqlalchemy.exc.IntegrityError):
         session.commit()
@@ -97,7 +94,7 @@ def test_lines_processed_negative_is_rejected(session: Session) -> None:
     negative values."""
     user, passage = _seed_user_and_passage(session)
 
-    event = ReadingEvent(user_id=user.id, passage_id=passage.id, lines_processed=-5)
+    event = ReadingEvent(owner_id=user.id, passage_id=passage.id, lines_processed=-5)
     session.add(event)
     with pytest.raises(sqlalchemy.exc.IntegrityError):
         session.commit()
@@ -112,7 +109,7 @@ def test_explicit_occurred_at_is_respected(session: Session) -> None:
     historical = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
     event = ReadingEvent(
-        user_id=user.id,
+        owner_id=user.id,
         passage_id=passage.id,
         lines_processed=10,
         occurred_at=historical,
@@ -132,8 +129,8 @@ def test_distinct_user_passage_pairs_persist_independently(session: Session) -> 
     (user, passage) pair are also fine — append-only by design, no
     unique constraint."""
     user, passage = _seed_user_and_passage(session)
-    session.add(ReadingEvent(user_id=user.id, passage_id=passage.id, lines_processed=3))
-    session.add(ReadingEvent(user_id=user.id, passage_id=passage.id, lines_processed=7))
+    session.add(ReadingEvent(owner_id=user.id, passage_id=passage.id, lines_processed=3))
+    session.add(ReadingEvent(owner_id=user.id, passage_id=passage.id, lines_processed=7))
     session.commit()
 
     rows = session.exec(select(ReadingEvent)).all()
@@ -145,8 +142,8 @@ def test_unique_ids_per_event(session: Session) -> None:
     """Default `id=default_factory=uuid.uuid4` produces distinct PKs
     so two rapid inserts don't collide on PK."""
     user, passage = _seed_user_and_passage(session)
-    e1 = ReadingEvent(user_id=user.id, passage_id=passage.id, lines_processed=1)
-    e2 = ReadingEvent(user_id=user.id, passage_id=passage.id, lines_processed=1)
+    e1 = ReadingEvent(owner_id=user.id, passage_id=passage.id, lines_processed=1)
+    e2 = ReadingEvent(owner_id=user.id, passage_id=passage.id, lines_processed=1)
     session.add_all([e1, e2])
     session.commit()
 

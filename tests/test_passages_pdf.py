@@ -89,7 +89,7 @@ def test_uploaded_pdf_persists_extracted_text(client: TestClient, session: Sessi
     passages = session.exec(select(Passage)).all()
     assert len(passages) == 1
     p = passages[0]
-    assert p.user_id == user.id
+    assert p.owner_id == user.id
     assert p.source_type == "pdf"
     assert p.source_filename == "sample_passage.pdf"
     # The fixture's page-1 content should round-trip through pdfplumber.

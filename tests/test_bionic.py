@@ -202,9 +202,9 @@ def test_amp_in_user_text_is_escaped() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_passage(session: Session, user_id: uuid.UUID, text: str) -> Passage:
+def _make_passage(session: Session, owner_id: uuid.UUID, text: str) -> Passage:
     p = Passage(
-        user_id=user_id,
+        owner_id=owner_id,
         text=text,
         text_hash=hashlib.sha256(text.encode("utf-8")).digest(),
         source_type="paste",
@@ -244,7 +244,7 @@ def test_reading_view_bionicizes_when_enabled(client: TestClient, session: Sessi
 
     session.add(
         Preference(
-            user_id=user.id,
+            owner_id=user.id,
             values={"bionic_enabled": True},
             updated_at=datetime.now(UTC),
         )
@@ -277,7 +277,7 @@ def test_reading_view_with_bionic_does_not_render_user_html_as_tags(
 
     session.add(
         Preference(
-            user_id=user.id,
+            owner_id=user.id,
             values={"bionic_enabled": True},
             updated_at=datetime.now(UTC),
         )

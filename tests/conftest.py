@@ -1,26 +1,36 @@
 """Shared pytest fixtures.
 
-Uses an in-memory SQLite database per test so tests don't touch Neon or
-pollute each other. The app's `get_session` dependency is overridden
-to yield sessions bound to the test engine; the `current_user`
-dependency is overridden by the `signed_in_user` fixture / `signed_in`
-helper so tests don't have to construct real Supabase JWTs.
+Uses an in-memory SQLite database per test so tests don't touch the
+real Supabase Postgres. The app's `get_session` dependency is
+overridden to yield sessions bound to the test engine; the
+`current_user` / `try_current_user` dependencies are overridden by
+the `signed_in_user` fixture / `signed_in` helper so tests don't have
+to construct real Supabase JWTs.
 
-Two ways tests authenticate after SUPA-5:
+Two ways tests authenticate after SUPA-2c:
 
-  - `signed_in_user` fixture — gives you a default User and configures
-    `current_user` to return them. Most tests just want one signed-in
-    user.
-  - `signed_in(session, email=…)` helper — for tests that need
-    multiple users (e.g. two-user isolation tests). Each call creates
-    a User and swaps `current_user`'s override.
+  - `signed_in_user` fixture — gives you a default user (SimpleNamespace
+    with `.id` and `.email`) and configures `current_user` to return them.
+  - `signed_in(session, email=…)` helper — for tests that need multiple
+    users (two-user isolation tests). Each call creates a fresh user
+    and swaps `current_user`'s override.
+
+`make_user(session, email=…)` is the helper for non-current users
+(cross-user isolation tests). Returns a SimpleNamespace; does not
+touch dependency overrides.
 
 The `supabase_mock` fixture exposes the MagicMock that stands in for
 `supabase.create_client`, so auth-flow tests (POST /login, GET
 /auth/callback) can configure the OTP / get_user return values.
+
+The user type returned by these helpers matches the shape of the
+Supabase `gotrue.types.User`: it has `.id` (UUID) and `.email` (str).
+That's all the routes touch.
 """
 
+import uuid
 from collections.abc import Generator
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -30,9 +40,8 @@ from sqlmodel.pool import StaticPool
 
 from app.db import get_session
 from app.integrations.supabase import client as supabase_client_module
+from app.integrations.supabase.auth import current_user, try_current_user
 from app.main import app
-from app.models.user import User
-from app.services.identity.session import current_user, try_current_user
 
 
 @pytest.fixture
@@ -59,45 +68,39 @@ def _autouse_supabase_stub(supabase_mock: MagicMock) -> None:  # noqa: ARG001
     """
 
 
-def make_user(session: Session, email: str = "other@example.com") -> User:
-    """Create a User without configuring any dependency override.
+def make_user(session: Session, email: str = "other@example.com") -> SimpleNamespace:  # noqa: ARG001
+    """Create a stand-in user object for tests.
 
-    Use this when a test needs a *non-current* user — typically for
-    ownership-isolation tests where the current user is signed_in()
-    but another user owns the resource under test.
+    The `session` parameter is unused after SUPA-2c (there's no User
+    table anymore) but the signature is preserved so the migration
+    didn't have to rewrite every call site. Returns a SimpleNamespace
+    whose shape matches Supabase's `gotrue.types.User` for the
+    attributes routes access: `.id` (UUID) and `.email` (str).
     """
-    user = User(email=email)
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    return user
+    return SimpleNamespace(id=uuid.uuid4(), email=email)
 
 
-def signed_in(session: Session, email: str = "reader@example.com") -> User:
-    """Create a User and configure `current_user` to return them.
+def signed_in(session: Session, email: str = "reader@example.com") -> SimpleNamespace:
+    """Create a stand-in user and configure `current_user` to return them.
 
-    Use this when you need to seed a specific user (custom email) or
-    multiple users in one test (call it twice; the second call swaps
-    the override). For the single-default-user case, prefer the
+    Use this when you need a specific user (custom email) or multiple
+    users in one test (call it twice; the second call swaps the
+    override). For the single-default-user case, prefer the
     `signed_in_user` fixture.
     """
-    user = User(email=email)
-    session.add(user)
-    session.commit()
-    session.refresh(user)
+    user = make_user(session, email=email)
     # Override BOTH dependencies: try_current_user calls current_user
     # as a plain function (not via Depends), so overriding only
     # current_user wouldn't intercept the soft-auth path used by
-    # routes that render differently for anonymous visitors (the
-    # landing page is the canonical example).
+    # routes that render differently for anonymous visitors.
     app.dependency_overrides[current_user] = lambda: user
     app.dependency_overrides[try_current_user] = lambda: user
     return user
 
 
 @pytest.fixture
-def signed_in_user(session: Session) -> User:
-    """Default signed-in user fixture: one User, current_user overridden.
+def signed_in_user(session: Session) -> SimpleNamespace:
+    """Default signed-in user fixture: one user, current_user overridden.
 
     Cleanup of `dependency_overrides` is handled by the `client`
     fixture's `app.dependency_overrides.clear()` after yield.

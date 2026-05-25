@@ -20,7 +20,7 @@ touching anything else on the page.
 
 import logging
 import uuid
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
@@ -28,17 +28,16 @@ from sqlmodel import Session, select
 
 from app.config import Settings, get_settings
 from app.db import get_session
+from app.integrations.supabase.auth import current_user
 from app.models.passage import Passage
 from app.models.preference import Preference
 from app.models.reading_event import ReadingEvent
-from app.models.user import User
 from app.services.comprehension.client import get_anthropic_client
 from app.services.comprehension.generator import (
     GeneratorError,
     PassageTooLongError,
     generate_questions,
 )
-from app.services.identity.session import current_user
 from app.services.reading.defaults import with_defaults
 from app.services.reading.options import (
     PREFERENCE_OPTIONS,
@@ -58,7 +57,7 @@ router = APIRouter()
 
 SessionDep = Annotated[Session, Depends(get_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
-CurrentUser = Annotated[User, Depends(current_user)]
+CurrentUser = Annotated[Any, Depends(current_user)]
 AnthropicClientDep = Annotated["anthropic.Anthropic", Depends(get_anthropic_client)]
 
 
@@ -77,7 +76,7 @@ def read_passage(
     AND the preference-toggle sidebar wired up.
     """
     passage = session.exec(
-        select(Passage).where(Passage.id == passage_id, Passage.user_id == user.id)  # type: ignore[arg-type]
+        select(Passage).where(Passage.id == passage_id, Passage.owner_id == user.id)  # type: ignore[arg-type]
     ).first()
     if passage is None:
         # 404, not 403 — same response shape whether the passage doesn't
@@ -130,7 +129,7 @@ def update_preference(
             detail=f"Invalid value for {key!r}",
         )
 
-    upsert_preference(user_id=user.id, key=key, value=coerced, session=session)
+    upsert_preference(owner_id=user.id, key=key, value=coerced, session=session)
     session.commit()
 
     # Re-read for the freshest merged view (handles both the new-row
@@ -171,7 +170,7 @@ def passage_questions(
     existence.
     """
     passage = session.exec(
-        select(Passage).where(Passage.id == passage_id, Passage.user_id == user.id)  # type: ignore[arg-type]
+        select(Passage).where(Passage.id == passage_id, Passage.owner_id == user.id)  # type: ignore[arg-type]
     ).first()
     if passage is None:
         raise HTTPException(status_code=404, detail="Passage not found")
@@ -197,7 +196,7 @@ def passage_questions(
         # feature, not a hard dependency.
         logger.warning(
             "comprehension generator failed",
-            extra={"passage_id": str(passage_id), "user_id": str(user.id)},
+            extra={"passage_id": str(passage_id), "owner_id": str(user.id)},
         )
         error = "unavailable"
 
@@ -244,7 +243,7 @@ def passage_close(
     only if dogfooding shows material divergence from manual counts.
     """
     passage = session.exec(
-        select(Passage).where(Passage.id == passage_id, Passage.user_id == user.id)  # type: ignore[arg-type]
+        select(Passage).where(Passage.id == passage_id, Passage.owner_id == user.id)  # type: ignore[arg-type]
     ).first()
     if passage is None:
         # Same 404 as cross-user/nonexistent on GET /read; preserves the
@@ -253,7 +252,7 @@ def passage_close(
 
     if not (_MIN_LINES <= lines <= _MAX_LINES):
         logger.warning(
-            "passage_close.invalid_lines user_id=%s passage_id=%s lines=%s",
+            "passage_close.invalid_lines owner_id=%s passage_id=%s lines=%s",
             user.id,
             passage_id,
             lines,
@@ -262,7 +261,7 @@ def passage_close(
 
     session.add(
         ReadingEvent(
-            user_id=user.id,
+            owner_id=user.id,
             passage_id=passage_id,
             lines_processed=lines,
         )

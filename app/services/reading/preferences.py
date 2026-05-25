@@ -23,7 +23,7 @@ from app.models.preference import Preference
 
 def upsert_preference(
     *,
-    user_id: UUID,
+    owner_id: UUID,
     key: str,
     value: Any,
     session: Session,
@@ -34,12 +34,12 @@ def upsert_preference(
 
     The caller is responsible for committing the session.
     """
-    existing = session.get(Preference, user_id)
+    existing = session.get(Preference, owner_id)
 
     if existing is None:
         session.add(
             Preference(
-                user_id=user_id,
+                owner_id=owner_id,
                 values={key: value},
                 updated_at=datetime.now(UTC),
             )
