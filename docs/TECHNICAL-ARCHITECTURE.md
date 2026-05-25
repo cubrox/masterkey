@@ -7,11 +7,12 @@ reading surface for neurodivergent readers, with Baha'i writings as its
 primary corpus. A single FastAPI process on Cloud Run serves Jinja2-rendered
 HTML; HTMX drives in-page interactivity (preference toggles, fragment swaps,
 deferred comprehension-question loading) without a JavaScript build step.
-State persists to Neon Postgres via SQLModel; per-PR Neon branches give
-every preview deploy an isolated database. Comprehension questions are
-generated on demand by Anthropic's Claude API and cached by passage hash.
-Authentication is passwordless via signed magic links delivered through
-Resend.
+State persists to Supabase Postgres via SQLModel; per-PR Supabase
+branches (Supabase GitHub App) give every preview deploy an isolated
+database. Comprehension questions are generated on demand by
+Anthropic's Claude API and cached by passage hash. Authentication is
+passwordless via Supabase Auth (GoTrue) magic links; the access token
+lives in an HttpOnly cookie.
 
 The design optimises for two product invariants: **WCAG conformance is a
 defining requirement, not a checkbox**, and **readability needs vary
@@ -154,18 +155,20 @@ the reader's profile.
               │  ┌───────────────────────┐  ┌────────────────┐ │
               │  │  SQLModel session     │  │ Anthropic SDK  │ │
               │  │  (psycopg pool)       │  │ (httpx-backed) │ │
+              │  │   supabase-py         │  │                │ │
               │  └───────────┬───────────┘  └────────┬───────┘ │
               └──────────────┼───────────────────────┼─────────┘
                              ▼                       ▼
-                  ┌──────────────────┐   ┌────────────────────┐
-                  │  Neon Postgres   │   │  Anthropic API     │
-                  │  user / pref /   │   │  Claude Haiku 4.5  │
-                  │  passage / event │   │  (prompt caching)  │
-                  └──────────────────┘   └────────────────────┘
-
-                             ┌──────────────────┐
-                             │  Resend (email)  │ ← magic-link delivery
-                             └──────────────────┘
+                  ┌────────────────────────┐   ┌────────────────────┐
+                  │  Supabase              │   │  Anthropic API     │
+                  │  - auth.users (GoTrue) │   │  Claude Haiku 4.5  │
+                  │  - passage / pref /    │   │  (prompt caching)  │
+                  │    reading_event       │   └────────────────────┘
+                  │  - RLS on every public │
+                  │    table              │
+                  │  - magic-link email    │
+                  │    delivery            │
+                  └────────────────────────┘
 ```
 
 ### Data Flow — typical reading session
@@ -309,9 +312,11 @@ CREATE TABLE reading_event (
 CREATE INDEX ON reading_event (occurred_at);
 ```
 
-`citext` and `gen_random_uuid()` ship with Neon; enable via Alembic
-migration that runs `CREATE EXTENSION IF NOT EXISTS citext;` and
-`CREATE EXTENSION IF NOT EXISTS pgcrypto;`.
+`gen_random_uuid()` is pre-installed on Supabase projects (pgcrypto
+extension is enabled by default). `citext` is no longer used — emails
+live in `auth.users` (Supabase-managed) rather than a local table.
+Extensions are declared in the Supabase SQL migration files
+(`supabase/migrations/*.sql`), not via Alembic.
 
 ## Development Standards
 
@@ -365,18 +370,24 @@ migration that runs `CREATE EXTENSION IF NOT EXISTS citext;` and
 
 ### Authentication
 
-- Passwordless magic link (15-minute TTL, single-use, hashed at rest).
-- Sessions: signed cookie via `itsdangerous`, `HttpOnly`, `Secure`,
-  `SameSite=Lax`. 30-day rolling re-issue.
-- Rate-limit `/login` and `/auth/verify` per IP and per email
-  (10/hour each) using a Postgres-backed token bucket. (Redis would be
-  better; add when traffic justifies it.)
+- Passwordless magic link delivered by Supabase Auth (GoTrue). Token
+  lifetime + single-use semantics are Supabase-managed.
+- Sessions: Supabase-issued JWT in an HttpOnly cookie
+  (`sb-access-token`, `Secure`, `SameSite=Lax`, 7-day max-age).
+- Rate-limit `POST /login` per IP and per email (10/hour each) using
+  a Postgres-backed token bucket. Supabase's own rate limits sit
+  upstream; ours is defense-in-depth against per-target abuse.
 
 ### Authorization
 
-- Single role: authenticated user. A user can only read/write their own
-  rows (enforced in route handlers via `WHERE user_id = current_user.id`).
-- No admin UI in MVP. Admin tasks happen via psql against the Neon branch.
+- Single role: authenticated user. Two enforcement layers:
+  1. Route handlers filter by `WHERE owner_id = current_user.id`
+  2. Supabase Row-Level Security on every public-schema table —
+     `owner_id = auth.uid()` for tenant-scoped tables; RLS enabled
+     with no anon/authenticated policies for service-role-only tables
+     (`comprehension_question_cache`, `rate_bucket`, `todo`)
+- No admin UI in MVP. Admin tasks happen via the Supabase Dashboard's
+  SQL editor or via the service-key client.
 
 ### Data Protection
 
@@ -405,7 +416,7 @@ migration that runs `CREATE EXTENSION IF NOT EXISTS citext;` and
 
 - Cloud Run scales horizontally on request concurrency (default 80
   concurrent requests per instance). Scale-to-zero when idle.
-- Neon's connection-pooled URL handles fan-out without exhausting the
+- Supabase's Supavisor pooler handles fan-out without exhausting the
   database.
 - Comprehension-question cache keeps LLM calls bounded by *distinct
   passages* read, not *re-reads*. Even at 10x the metric target, expected
