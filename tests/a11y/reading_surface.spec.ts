@@ -25,14 +25,6 @@ import { seedAndLogin, type Variant } from "./fixtures/seed";
 
 const VARIANTS: Variant[] = ["default", "high-contrast", "large-text", "bionic"];
 
-// SUPA-2c (#91) deleted app/api/test_seed.py — the route this fixture
-// relied on. The Playwright a11y harness needs a replacement seeding
-// mechanism that uses Supabase's admin API to create a user and mint
-// a session JWT, then sets the sb-access-token cookie on the browser
-// context. Tracked in a follow-up ticket; until then, skip these
-// tests so the CI gate doesn't permanently block the migration epic.
-test.skip(true, "needs Supabase-admin-based seeding; see SUPA-2c follow-up");
-
 for (const variant of VARIANTS) {
   test(`reading surface a11y: ${variant}`, async ({ page, context, request }) => {
     const { passageId } = await seedAndLogin(request, context, variant);

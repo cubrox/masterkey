@@ -6,6 +6,7 @@ Run locally:
 Production (Cloud Run) runs the same command — see Dockerfile.
 """
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -54,8 +55,13 @@ app.include_router(auth.router)
 app.include_router(passages.router)
 app.include_router(reading.router)
 
-# Test-only seed router (A11Y-2 #25) was DELETED in SUPA-2c (#91)
-# because it depended on the legacy itsdangerous cookie-signing path.
-# The Playwright a11y harness will need a follow-up ticket to seed
-# users via Supabase Auth's admin API instead. Until then, the
-# CUBROX_TEST_SEED_ENABLED env var is a no-op.
+# Test-only seed router (A11Y-2 #25, restored in #97). Only mounts when
+# CUBROX_TEST_SEED_ENABLED=true — the CI a11y job sets this via
+# playwright.config.ts > webServer.env. Production Cloud Run revisions
+# never set it, so the router is unreachable in prod. The router file
+# itself has a second module-level guard so a stray `import` would
+# also fail loudly.
+if os.environ.get("CUBROX_TEST_SEED_ENABLED") == "true":
+    from app.api import test_seed
+
+    app.include_router(test_seed.router)

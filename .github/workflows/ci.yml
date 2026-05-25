@@ -236,6 +236,38 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --extra dev
 
+      # Local Supabase stack for the a11y harness (#97). The seed
+      # router calls the real Supabase admin + auth APIs to mint a
+      # session JWT; without a backend to talk to those calls would
+      # fail. The CLI's local stack runs in Docker (pre-installed on
+      # ubuntu-latest), applies supabase/migrations/*.sql automatically,
+      # and exposes itself on http://127.0.0.1:54321.
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase stack
+        # `supabase status -o json` returns the freshly-generated keys
+        # + DB URL for the local stack; we export them to GITHUB_ENV
+        # so the Playwright step (and the uvicorn subprocess it spawns)
+        # can read them without hard-coding values (the local-default
+        # JWTs drift across CLI versions).
+        #
+        # DATABASE_URL points at the local Supabase Postgres so the
+        # Passage / Preference INSERTs land in the same DB the migrations
+        # already populated. Without this the subprocess falls back to
+        # `sqlite:///./dev.db` (the pydantic default) which has no
+        # schema applied — INSERTs fail with `no such table: passage`.
+        run: |
+          supabase start
+          {
+            echo "SUPABASE_URL=$(supabase status -o json | jq -r '.API_URL')"
+            echo "SUPABASE_ANON_KEY=$(supabase status -o json | jq -r '.ANON_KEY')"
+            echo "SUPABASE_SERVICE_KEY=$(supabase status -o json | jq -r '.SERVICE_ROLE_KEY')"
+            echo "DATABASE_URL=$(supabase status -o json | jq -r '.DB_URL')"
+          } >> "$GITHUB_ENV"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -276,6 +308,9 @@ jobs:
         # ENVIRONMENT are also set inside playwright.config.ts >
         # webServer.env, so the FastAPI subprocess sees them
         # regardless of whether the job-level env propagates.
+        # SUPABASE_* come from $GITHUB_ENV (set by the "Start local
+        # Supabase stack" step above) and are forwarded into the
+        # uvicorn subprocess by playwright.config.ts.
         env:
           CUBROX_TEST_SEED_ENABLED: 'true'
           SESSION_COOKIE_SECURE: 'false'
