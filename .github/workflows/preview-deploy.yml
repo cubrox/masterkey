@@ -233,7 +233,6 @@ jobs:
         with:
           script: |
             const previewUrl = '${{ steps.deploy.outputs.preview_url }}';
-            const neonBranch = '${{ steps.neon.outputs.branch_id }}';
             const smoke = '${{ steps.smoke_test.outputs.result }}';
 
             let body = '## Preview Deployment\n\n';
@@ -241,7 +240,6 @@ jobs:
             body += '|-----------|--------|\n';
             body += `| Preview URL | ${previewUrl || 'Not deployed'} |\n`;
             body += `| Cloud Run tag | \`pr-${{ env.PR_NUMBER }}\` |\n`;
-            body += `| Neon branch | ${neonBranch ? `\`pr-${{ env.PR_NUMBER }}\`` : 'Not configured'} |\n`;
             body += `| Smoke test | ${smoke === 'passed' ? 'Passed' : smoke === 'failed' ? 'Failed' : 'Skipped'} |\n\n`;
 
             if (previewUrl && smoke === 'passed') {
