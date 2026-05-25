@@ -142,6 +142,14 @@ jobs:
         if: steps.check_python.outputs.skip != 'true'
         run: uv run --extra dev ruff check .
 
+      - name: Check formatting with ruff
+        # Formatter coverage was previously provided by the now-deleted
+        # auto-fix.yml workflow (#93). Without this step a contributor
+        # could pass `ruff check` and still introduce formatter-style
+        # violations (quote style, trailing commas, function-call wrap).
+        if: steps.check_python.outputs.skip != 'true'
+        run: uv run --extra dev ruff format . --check
+
       - name: Type check with mypy
         if: steps.check_python.outputs.skip != 'true'
         continue-on-error: true
