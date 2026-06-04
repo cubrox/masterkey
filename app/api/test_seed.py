@@ -43,6 +43,7 @@ process via `playwright.config.ts > webServer.env`. Production Cloud
 Run revisions do not set this var; the seed router cannot be reached.
 """
 
+import hashlib
 import os
 import secrets
 import uuid
@@ -59,6 +60,8 @@ from app.integrations.supabase.auth import SUPABASE_COOKIE_NAME
 from app.integrations.supabase.client import anon_client, service_client
 from app.models.passage import Passage
 from app.models.preference import Preference
+from app.services.comprehension import cache as comprehension_cache
+from app.services.comprehension.prompts import PROMPT_VERSION
 
 _SEED_ENABLED = os.environ.get("CUBROX_TEST_SEED_ENABLED") == "true"
 _TEST_ENV = os.environ.get("ENVIRONMENT") == "test"
@@ -90,6 +93,30 @@ SEED_PASSAGE_TEXT = (
 )
 
 
+# Pre-baked comprehension questions for the `with_questions` path (A11Y-5
+# #126). Seeding these into the cache makes the questions panel a cache
+# HIT, so the reading view renders the real answer UI (labeled textareas +
+# <details> reveals) WITHOUT an Anthropic call — letting axe scan it in CI.
+# The shape matches PROMPT_VERSION 2: type + text + a source-grounded answer.
+SEED_QUESTIONS: list[dict[str, str]] = [
+    {
+        "type": "recall",
+        "text": "What does the first counsel tell the reader to possess?",
+        "answer": "A pure, kindly and radiant heart.",
+    },
+    {
+        "type": "recall",
+        "text": "What does the speaker call the best beloved of all things?",
+        "answer": "Justice.",
+    },
+    {
+        "type": "summary",
+        "text": "What two qualities does the passage urge the reader to value?",
+        "answer": "A pure heart and justice.",
+    },
+]
+
+
 # Per-variant overrides to the stored Preference values. `default` is
 # empty (no row created — the reading view falls back to the
 # DEFAULT_PREFERENCES path). The other three exercise one axis each so
@@ -107,6 +134,7 @@ def seed_passage_and_login(
     variant: Variant,
     session: SessionDep,
     settings: SettingsDep,
+    with_questions: bool = False,
 ) -> JSONResponse:
     """Seed a fresh Supabase user + passage + (optional) preference;
     return the Supabase access token as the `sb-access-token` cookie +
@@ -115,6 +143,10 @@ def seed_passage_and_login(
     Each invocation creates an independent throwaway user (UUID-suffixed
     email) so concurrent Playwright tests don't collide on the email
     unique constraint in Supabase Auth.
+
+    When `with_questions=true` (A11Y-5 #126), also seed the comprehension
+    cache for this passage so the questions panel renders its real answer
+    UI from a cache hit — no Anthropic call — and axe can scan it.
     """
     email = f"a11y-{uuid.uuid4()}@example.test"
     # Supabase requires a password on admin.create_user (even with
@@ -145,10 +177,10 @@ def seed_passage_and_login(
 
     passage = Passage(
         owner_id=user_id,
-        # Placeholder hash — the read path doesn't validate it; only
-        # the comprehension-cache uses text_hash, which the a11y tests
-        # don't exercise (the questions panel makes a network call we
-        # don't care about for visual a11y).
+        # Placeholder hash — the read path doesn't validate it. Note the
+        # comprehension route keys its cache on SHA-256(passage.text), not
+        # this column, so the `with_questions` seed below hashes the text
+        # directly rather than reusing this value.
         text_hash=b"\x00" * 32,
         text=SEED_PASSAGE_TEXT,
         source_type="paste",
@@ -164,6 +196,21 @@ def seed_passage_and_login(
                 values=prefs_overrides,
                 updated_at=datetime.now(UTC),
             )
+        )
+
+    if with_questions:
+        # Seed the comprehension cache with the EXACT key the questions
+        # route looks up (GET /passages/{id}/questions): hash of the
+        # passage text, question_type="recall", the configured model, and
+        # the current PROMPT_VERSION. The route then cache-hits instead of
+        # calling Anthropic.
+        comprehension_cache.put_cache(
+            passage_hash=hashlib.sha256(SEED_PASSAGE_TEXT.encode("utf-8")).digest(),
+            question_type="recall",
+            model_id=settings.anthropic_model,
+            prompt_version=PROMPT_VERSION,
+            questions=SEED_QUESTIONS,
+            session=session,
         )
 
     session.commit()

@@ -28,9 +28,13 @@ export async function seedAndLogin(
   request: APIRequestContext,
   context: BrowserContext,
   variant: Variant,
+  opts: { withQuestions?: boolean } = {},
 ): Promise<SeedResult> {
+  // `with_questions` (A11Y-5 #126) also seeds the comprehension cache so
+  // the questions panel renders its real answer UI from a cache hit.
+  const q = opts.withQuestions ? "&with_questions=true" : "";
   const response = await request.post(
-    `/test/seed-passage-and-login?variant=${variant}`,
+    `/test/seed-passage-and-login?variant=${variant}${q}`,
   );
   if (!response.ok()) {
     throw new Error(
