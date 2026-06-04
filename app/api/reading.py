@@ -193,6 +193,17 @@ def passage_questions(
     if passage is None:
         raise HTTPException(status_code=404, detail="Passage not found")
 
+    # COMP-5 (#128): comprehension off for this passage → never call the
+    # generator. The reading view doesn't render the lazy-load placeholder
+    # when disabled, so this is defense-in-depth (and keeps a direct hit
+    # from spending an LLM call on a disabled passage).
+    if not passage.comprehension_enabled:
+        return templates.TemplateResponse(
+            request=request,
+            name="fragments/questions_panel.html",
+            context={"questions": None, "error": "disabled"},
+        )
+
     questions: list[dict] | None = None
     error: str | None = None
 
@@ -222,6 +233,39 @@ def passage_questions(
         request=request,
         name="fragments/questions_panel.html",
         context={"questions": questions, "error": error},
+    )
+
+
+@router.post("/passages/{passage_id}/comprehension", response_class=HTMLResponse)
+def toggle_comprehension(
+    request: Request,
+    passage_id: uuid.UUID,
+    user: CurrentUser,
+    session: SessionDep,
+    enabled: Annotated[bool, Form()],
+) -> HTMLResponse:
+    """Enable/disable comprehension questions for one passage (COMP-5 #128).
+
+    Flips `passage.comprehension_enabled` and returns the `#comprehension`
+    fragment reflecting the new state; HTMX swaps it via `outerHTML`.
+    Ownership-checked exactly like GET /read — cross-user / nonexistent
+    passages 404 with an identical body.
+    """
+    passage = session.exec(
+        select(Passage).where(Passage.id == passage_id, Passage.owner_id == user.id)  # type: ignore[arg-type]
+    ).first()
+    if passage is None:
+        raise HTTPException(status_code=404, detail="Passage not found")
+
+    passage.comprehension_enabled = enabled
+    session.add(passage)
+    session.commit()
+    session.refresh(passage)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="fragments/comprehension.html",
+        context={"passage": passage},
     )
 
 

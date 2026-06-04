@@ -11,11 +11,7 @@
 
   {% include "fragments/reading_surface.html" %}
 
-  <div id="questions-panel"
-       hx-get="/passages/{{ passage.id }}/questions"
-       hx-trigger="load delay:200ms"
-       hx-swap="outerHTML"
-       aria-live="polite"></div>
+  {% include "fragments/comprehension.html" %}
 
   {#
     METRIC-2: emit one reading_event on unload. The inline <script>

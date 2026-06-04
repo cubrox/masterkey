@@ -1,0 +1,25 @@
+<div id="comprehension">
+  {% if passage.comprehension_enabled %}
+    <button type="button"
+            class="comprehension-toggle"
+            hx-post="/passages/{{ passage.id }}/comprehension"
+            hx-vals='{"enabled": "false"}'
+            hx-target="#comprehension"
+            hx-swap="outerHTML">Hide questions for this passage</button>
+    {# Lazy-loaded panel — fires ~200ms after this fragment renders,
+       whether on first page load or after re-enabling via the toggle. #}
+    <div id="questions-panel"
+         hx-get="/passages/{{ passage.id }}/questions"
+         hx-trigger="load delay:200ms"
+         hx-swap="outerHTML"
+         aria-live="polite"></div>
+  {% else %}
+    <button type="button"
+            class="comprehension-toggle"
+            hx-post="/passages/{{ passage.id }}/comprehension"
+            hx-vals='{"enabled": "true"}'
+            hx-target="#comprehension"
+            hx-swap="outerHTML">Show comprehension questions</button>
+    <p>Comprehension questions are off for this passage.</p>
+  {% endif %}
+</div>
