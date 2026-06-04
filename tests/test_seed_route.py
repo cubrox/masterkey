@@ -244,3 +244,56 @@ def test_seed_500s_when_supabase_sign_in_returns_no_session(
         "/test/seed-passage-and-login?variant=default", follow_redirects=False
     )
     assert response.status_code == 500
+
+
+def test_seed_with_questions_seeds_cache_the_route_will_hit(
+    seed_client: TestClient, session: Session, supabase_mock: MagicMock
+) -> None:
+    """A11Y-5 (#126): `with_questions=true` seeds the comprehension cache
+    with the EXACT key the questions route looks up. Proven end-to-end:
+    after the seed, `generate_questions` for the seed passage returns the
+    seeded set WITHOUT calling Anthropic — i.e. a cache hit, which is what
+    lets the a11y harness render the real answer UI without an API key."""
+    import app.api.test_seed as test_seed
+    from app.config import get_settings
+    from app.services.comprehension.generator import generate_questions
+
+    _wire_supabase_for_seed(supabase_mock)
+    response = seed_client.post("/test/seed-passage-and-login?variant=default&with_questions=true")
+    assert response.status_code == 200
+
+    client = MagicMock()
+    result = generate_questions(
+        passage_text=test_seed.SEED_PASSAGE_TEXT,
+        question_type="recall",
+        client=client,
+        model_id=get_settings().anthropic_model,
+        session=session,
+    )
+    assert client.messages.create.call_count == 0  # cache hit, no LLM call
+    assert result == test_seed.SEED_QUESTIONS
+
+
+def test_seed_without_questions_leaves_comprehension_cache_empty(
+    seed_client: TestClient, session: Session, supabase_mock: MagicMock
+) -> None:
+    """The default path must NOT seed the cache — existing reading-surface
+    a11y tests keep rendering the panel's "unavailable" state, unchanged."""
+    import hashlib
+
+    import app.api.test_seed as test_seed
+    from app.config import get_settings
+    from app.services.comprehension import cache
+    from app.services.comprehension.prompts import PROMPT_VERSION
+
+    _wire_supabase_for_seed(supabase_mock)
+    seed_client.post("/test/seed-passage-and-login?variant=default")
+
+    cached = cache.get_cached(
+        passage_hash=hashlib.sha256(test_seed.SEED_PASSAGE_TEXT.encode("utf-8")).digest(),
+        question_type="recall",
+        model_id=get_settings().anthropic_model,
+        prompt_version=PROMPT_VERSION,
+        session=session,
+    )
+    assert cached is None
