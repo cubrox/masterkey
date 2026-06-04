@@ -31,4 +31,8 @@ class Passage(SQLModel, table=True):
     text_hash: bytes
     source_type: str
     source_filename: str | None = Field(default=None)
+    # COMP-5 (#128): per-passage comprehension toggle. Default on; a reader
+    # can disable questions for a passage where the auto-generated ones are
+    # unhelpful (PRD Risk #2 mitigation for sacred/poetic text).
+    comprehension_enabled: bool = Field(default=True, nullable=False)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
