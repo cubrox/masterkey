@@ -21,6 +21,7 @@ import logging
 from typing import Any
 from unittest.mock import MagicMock
 
+import anthropic
 import pytest
 from sqlmodel import Session
 
@@ -414,6 +415,78 @@ def test_empty_content_blocks_raises_generator_error(session: Session) -> None:
             model_id=TEST_MODEL_ID,
             session=session,
         )
+
+
+# ---------------------------------------------------------------------------
+# Real-world model output — tolerant parsing + graceful API-failure
+# (regression for the prod "comprehension unavailable" on first real call)
+# ---------------------------------------------------------------------------
+
+
+def test_markdown_fenced_json_response_parses(session: Session) -> None:
+    """Haiku frequently wraps the array in ```json … ``` despite the
+    'NO markdown' instruction. The parser must tolerate it."""
+    client = _make_mock_client(response_text=f"```json\n{VALID_LLM_OUTPUT}\n```")
+
+    result = generate_questions(
+        passage_text=TEST_PASSAGE,
+        question_type="recall",
+        client=client,
+        model_id=TEST_MODEL_ID,
+        session=session,
+    )
+    assert len(result) == 3
+    assert result[0]["text"] == "What is the first counsel?"
+
+
+def test_prose_wrapped_json_response_parses(session: Session) -> None:
+    """Preamble/trailing chatter around a well-formed array must still
+    parse — slice to the outermost brackets."""
+    wrapped = (
+        f"Sure! Here are three questions:\n{VALID_LLM_OUTPUT}\nLet me know if you'd like more."
+    )
+    client = _make_mock_client(response_text=wrapped)
+
+    result = generate_questions(
+        passage_text=TEST_PASSAGE,
+        question_type="recall",
+        client=client,
+        model_id=TEST_MODEL_ID,
+        session=session,
+    )
+    assert len(result) == 3
+
+
+def test_anthropic_api_error_degrades_to_generator_error(session: Session) -> None:
+    """An API-layer failure (bad key, bad model id, rate limit, overload,
+    network) must surface as GeneratorError so the route shows the
+    'unavailable' fragment instead of 500ing — comprehension is a feature,
+    not a hard dependency. The bug: the call was previously unwrapped, so
+    these propagated as a raw 500."""
+    client = MagicMock()
+    client.messages.create.side_effect = anthropic.AnthropicError("simulated API failure")
+
+    with pytest.raises(GeneratorError):
+        generate_questions(
+            passage_text=TEST_PASSAGE,
+            question_type="recall",
+            client=client,
+            model_id=TEST_MODEL_ID,
+            session=session,
+        )
+
+    # And nothing was cached (no poisoning on API failure).
+    text_hash = hashlib.sha256(TEST_PASSAGE.encode("utf-8")).digest()
+    assert (
+        cache.get_cached(
+            passage_hash=text_hash,
+            question_type="recall",
+            model_id=TEST_MODEL_ID,
+            prompt_version=PROMPT_VERSION,
+            session=session,
+        )
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------
