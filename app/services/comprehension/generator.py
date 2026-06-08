@@ -20,16 +20,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import Annotated, Any, Literal
 
+import anthropic
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from sqlmodel import Session
 
 from app.services.comprehension import cache
 from app.services.comprehension.prompts import PROMPT_VERSION, SYSTEM_PROMPT
-
-if TYPE_CHECKING:
-    import anthropic
 
 logger = logging.getLogger(__name__)
 
@@ -152,18 +150,30 @@ def generate_questions(
         },
     )
 
-    response = client.messages.create(
-        model=model_id,
-        max_tokens=DEFAULT_MAX_TOKENS,
-        system=[
-            {
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": passage_text}],
-    )
+    try:
+        response = client.messages.create(
+            model=model_id,
+            max_tokens=DEFAULT_MAX_TOKENS,
+            system=[
+                {
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": passage_text}],
+        )
+    except anthropic.AnthropicError as exc:
+        # Auth failure (missing/invalid key), bad model id, rate limit,
+        # overload, network — all degrade to the "unavailable" fragment
+        # rather than 500ing the reading view. Comprehension is a feature,
+        # not a hard dependency. Log the error TYPE (never the message —
+        # it can echo request content) so prod failures are diagnosable.
+        logger.warning(
+            "comprehension Anthropic call failed",
+            extra={"text_hash": text_hash.hex(), "error_type": type(exc).__name__},
+        )
+        raise GeneratorError("Anthropic API call failed") from exc
 
     questions = _parse_response(response, text_hash=text_hash)
 
@@ -180,6 +190,34 @@ def generate_questions(
     return questions
 
 
+def _extract_json_array(text: str) -> str:
+    """Pull the JSON array out of a model response that may be wrapped.
+
+    The prompt asks for a bare JSON array with no markdown or preamble,
+    but real models (Haiku especially) frequently fence the output in
+    ```json … ``` or add a sentence before/after. A bare `json.loads`
+    rejects those, which surfaced in prod as "comprehension unavailable"
+    on the first real (non-mocked, non-cached) generation. This strips a
+    surrounding code fence and, failing that, slices to the outermost
+    `[ … ]` so well-formed JSON wrapped in chatter still parses.
+    """
+    s = text.strip()
+
+    # Strip a leading ``` / ```json fence and its trailing ``` partner.
+    if s.startswith("```"):
+        s = s.split("\n", 1)[1] if "\n" in s else s[3:]
+        if s.rstrip().endswith("```"):
+            s = s.rstrip()[:-3]
+        s = s.strip()
+
+    # If prose still surrounds the array, slice to the outermost brackets.
+    start, end = s.find("["), s.rfind("]")
+    if start != -1 and end > start:
+        s = s[start : end + 1]
+
+    return s
+
+
 def _parse_response(response: Any, *, text_hash: bytes) -> list[dict[str, Any]]:
     """Extract + validate the JSON array from the LLM response.
 
@@ -193,7 +231,7 @@ def _parse_response(response: Any, *, text_hash: bytes) -> list[dict[str, Any]]:
         raise GeneratorError("Anthropic response had no text content block") from exc
 
     try:
-        parsed = json.loads(raw_text)
+        parsed = json.loads(_extract_json_array(raw_text))
     except json.JSONDecodeError as exc:
         logger.warning(
             "comprehension response was not valid JSON",
