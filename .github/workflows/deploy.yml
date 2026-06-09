@@ -78,10 +78,44 @@ jobs:
         if: steps.check_secrets.outputs.skip != 'true'
         run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
 
-      # Schema migrations now run via the Supabase GitHub App
-      # auto-branching integration (per SUPA-1 / #80). No
-      # workflow-driven migration step needed; the alembic chain was
-      # deleted in SUPA-2b / #87.
+      # ── Apply DB migrations to production (OPS-3 #139) ────────────────
+      #
+      # Until now nothing applied supabase/migrations/*.sql to prod — it was
+      # hand-maintained, which is how BUG-4 and the paste-500 (a column that
+      # never landed) happened. Production's migration ledger was baselined
+      # once via baseline-migrations.yml, so `supabase db push` now sees the
+      # existing migrations as applied and runs only NEW ones.
+      #
+      # Run BEFORE build/deploy so a failed migration fails the deploy
+      # instead of shipping code against an old schema. Over the SESSION
+      # POOLER (IPv4) — the direct host is IPv6-only and unreachable from
+      # Actions runners (see SUPABASE_DB_URL in baseline-migrations.yml).
+      - name: Check for migration DB secret
+        if: steps.check_secrets.outputs.skip != 'true'
+        id: check_migrate
+        run: |
+          if [ -z "${{ secrets.SUPABASE_DB_URL }}" ]; then
+            echo "migrate=false" >> "$GITHUB_OUTPUT"
+            echo "SUPABASE_DB_URL not set — skipping migrations. Set the session-pooler URL to enable auto-apply."
+          else
+            echo "migrate=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Supabase CLI (pinned)
+        if: steps.check_migrate.outputs.migrate == 'true'
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.105.0
+
+      - name: Apply database migrations
+        if: steps.check_migrate.outputs.migrate == 'true'
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          # URL carries the DB password — keep it out of the logs.
+          echo "::add-mask::$DB_URL"
+          supabase db push --db-url "$DB_URL"
 
       - name: Build and push container
         if: steps.check_secrets.outputs.skip != 'true'
