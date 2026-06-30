@@ -117,7 +117,7 @@ Most workflows read `vars.CLOUD_RUN_SERVICE` and `vars.ARTIFACT_REPO` with frame
 | Workflow file | Today | Change |
 |---------------|-------|--------|
 | `.github/workflows/ci.yml:218,307,315` | Comments + `env: CUBROX_TEST_SEED_ENABLED: 'true'` inline literal | **Edit file directly in Phase 1 PR.** Rename to `MASTERKEY_TEST_SEED_ENABLED`. This is NOT a `vars.*` reference — a `vars` flip cannot reach it. If left unchanged, the a11y job's uvicorn subprocess receives the old env name, the test-seed router never mounts, every Playwright test 404s on `/test/seed`, and Phase 1 CI goes red. (B1) |
-| `.github/workflows/deploy.yml:25-26` | `ARTIFACT_REPO: ${{ vars.ARTIFACT_REPO \|\| 'agile-flow' }}` / `SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE \|\| 'agile-flow-app' }}` | **No file edit.** Set GitHub repo `vars.CLOUD_RUN_SERVICE = masterkey` and `vars.ARTIFACT_REPO = masterkey` so the `||` default is bypassed. |
+| `.github/workflows/deploy.yml:25-26` | `ARTIFACT_REPO: ${{ vars.ARTIFACT_REPO OR 'agile-flow' }}` / `SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE OR 'agile-flow-app' }}` (OR = literal `&#124;&#124;`) | **No file edit.** Set GitHub repo `vars.CLOUD_RUN_SERVICE = masterkey` and `vars.ARTIFACT_REPO = masterkey` so the default is bypassed. |
 | `.github/workflows/preview-deploy.yml:27-28` | Same pattern | Same — repo `vars` only. |
 | `.github/workflows/preview-cleanup.yml:20` | `SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE \|\| 'agile-flow-app' }}` | Same — repo `vars` only. |
 | `.github/workflows/synthetic-monitor.yml:46` | Same | Same. **Plus** disable schedule for the cutover window per resolved Q9 (comment out `schedule:` block in Phase 1 step 13; restore in Phase 4 step 32 via a small follow-up PR). |
@@ -241,24 +241,24 @@ grep -c "Self-healing post-sync refresh" scripts/template-sync.sh   # MUST retur
 ```
 The grep is the v1.5.0 release-notes' own verification gate. If it returns 0, abort and re-curl.
 (-1).5 **Run the sync.** Execute `bash scripts/template-sync.sh`. This now-v1.5.0 script:
-   - Runs the early one-time migration block (lines 47-58): `git mv .agile-flow-version .gembaflow-version`, same for `.agile-flow-meta/`, same for `.agile-flow-overrides`. Local edits done in (-1).3 are now irrelevant; the file paths in the new script point at `.gembaflow-*` natively.
-   - Reads `.gembaflow-version`, sees `version=1.3.0` and upstream latest is `v1.5.0`, creates branch `gembaflow-sync/v1.5.0`, downloads the tarball, copies syncDirectories.
-   - Post-sync loop: re-copies `scripts/template-sync.sh` and `scripts/lib/overrides.sh` from the tarball if they differ from upstream AND not in overrides. (Idempotent on this run because we already curl'd the latest in step (-1).4.)
-   - Updates `.gembaflow-version` `version` field to `1.5.0`.
-   - The script opens a PR (or stages a branch — depends on environment; check terminal output).
+- Runs the early one-time migration block (lines 47-58): `git mv .agile-flow-version .gembaflow-version`, same for `.agile-flow-meta/`, same for `.agile-flow-overrides`. Local edits done in (-1).3 are now irrelevant; the file paths in the new script point at `.gembaflow-*` natively.
+- Reads `.gembaflow-version`, sees `version=1.3.0` and upstream latest is `v1.5.0`, creates branch `gembaflow-sync/v1.5.0`, downloads the tarball, copies syncDirectories.
+- Post-sync loop: re-copies `scripts/template-sync.sh` and `scripts/lib/overrides.sh` from the tarball if they differ from upstream AND not in overrides. (Idempotent on this run because we already curl'd the latest in step (-1).4.)
+- Updates `.gembaflow-version` `version` field to `1.5.0`.
+- The script opens a PR (or stages a branch — depends on environment; check terminal output).
 (-1).6 **Reconcile the overrides list.** The auto-migration moves `.agile-flow-overrides` to `.gembaflow-overrides` byte-for-byte (it's `git mv`, not a content-transform). Walk the file: every path still listed must exist post-sync. Specifically:
-   - The 5 agent/command paths (`.claude/agents/github-ticket-worker.md`, `.claude/agents/devops-engineer.md`, `.claude/agents/system-architect.md`, `.claude/commands/doctor.md`, `.claude/commands/bootstrap-architecture.md`) — verify none were renamed by upstream v1.4/v1.5 (R16). If `.claude/agents/devops-engineer.md` became `.claude/agents/platform-engineer.md` upstream (hypothetical), our overrides line silently no-ops and the new file gets stomped on next sync.
-   - The 10 GCP/workshop scripts in `scripts/*.sh` — confirm none are now shipped by upstream (which would mean we're overriding an actual upstream file rather than a fork-local addition).
-   - Append the two new upstream overrides if applicable: `.gembaflow-meta/` and `.claude/commands/work-ticket.md` per upstream v1.5.0's `.gembaflow-overrides` (verified via `gh api`). The first is structural; the second is so that bootstrap-time-substituted placeholders survive the next sync.
-   - **Create `.gembaflow-config.json`** by copying `.gembaflow-config.example.json` and filling in actual values. Run `bash scripts/substitute-config-placeholders.sh` (new in v1.5.0) to populate placeholders in `.claude/commands/work-ticket.md` and `.claude/commands/drain.md`.
+- The 5 agent/command paths (`.claude/agents/github-ticket-worker.md`, `.claude/agents/devops-engineer.md`, `.claude/agents/system-architect.md`, `.claude/commands/doctor.md`, `.claude/commands/bootstrap-architecture.md`) — verify none were renamed by upstream v1.4/v1.5 (R16). If `.claude/agents/devops-engineer.md` became `.claude/agents/platform-engineer.md` upstream (hypothetical), our overrides line silently no-ops and the new file gets stomped on next sync.
+- The 10 GCP/workshop scripts in `scripts/*.sh` — confirm none are now shipped by upstream (which would mean we're overriding an actual upstream file rather than a fork-local addition).
+- Append the two new upstream overrides if applicable: `.gembaflow-meta/` and `.claude/commands/work-ticket.md` per upstream v1.5.0's `.gembaflow-overrides` (verified via `gh api`). The first is structural; the second is so that bootstrap-time-substituted placeholders survive the next sync.
+- **Create `.gembaflow-config.json`** by copying `.gembaflow-config.example.json` and filling in actual values. Run `bash scripts/substitute-config-placeholders.sh` (new in v1.5.0) to populate placeholders in `.claude/commands/work-ticket.md` and `.claude/commands/drain.md`.
 (-1).7 **Doc string updates** (per "What changes" item 4) AND **verification gate:**
-   - Edit `CLAUDE.md`, `UPSTREAM.md`, `VERSIONING.md` per item 4.
-   - Add `json-validate` to branch-protection ruleset 15886599.
-   - `bash scripts/doctor.sh` — must complete without ERROR.
-   - `uv run pytest` — full suite must pass.
-   - Manual smoke: `/work-ticket` slash command resolves (loads the now-template-substituted spec), `/sprint-status` runs, `/doctor` runs.
-   - `grep -r "\.agile-flow-" . --include="*.sh" --include="*.md" --include="*.json"` — expect 0 hits in non-historical files (session journals + ADRs may keep their references as historical record).
-   - Open PR for `feature/framework-align-gembaflow-v1.5.0`.
+- Edit `CLAUDE.md`, `UPSTREAM.md`, `VERSIONING.md` per item 4.
+- Add `json-validate` to branch-protection ruleset 15886599.
+- `bash scripts/doctor.sh` — must complete without ERROR.
+- `uv run pytest` — full suite must pass.
+- Manual smoke: `/work-ticket` slash command resolves (loads the now-template-substituted spec), `/sprint-status` runs, `/doctor` runs.
+- `grep -r "\.agile-flow-" . --include="*.sh" --include="*.md" --include="*.json"` — expect 0 hits in non-historical files (session journals + ADRs may keep their references as historical record).
+- Open PR for `feature/framework-align-gembaflow-v1.5.0`.
 
 #### Why this lands before masterkey Phase 0
 

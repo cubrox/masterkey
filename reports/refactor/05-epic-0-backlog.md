@@ -210,7 +210,7 @@ This is the keystone Phase -1 step. If it silently fails (R18), step E0-T4's syn
 3. Verify auto-migration: `ls -la .gembaflow-version .gembaflow-overrides .gembaflow-meta/ 2>&1` — all 3 exist. `ls -la .agile-flow-* 2>&1` — all return "No such file or directory".
 4. Verify version bump: `grep '"version"' .gembaflow-version` shows `1.5.0`.
 5. `git status` — review file list. Categorize:
-   - Renames (R: .agile-flow-* → .gembaflow-*)
+   - Renames (R: `.agile-flow-*` → `.gembaflow-*`)
    - New files (e.g., `.gembaflow-config.example.json`, `.claude/modes/*`, `features/*`, new ADRs, new docs)
    - Modified files (every file under `.claude/` and `scripts/` that's not in overrides)
    - Removed files (per release notes: `scripts/test-report-issue.sh`, `docs/reports/report-issue-acceptance-template.html`)

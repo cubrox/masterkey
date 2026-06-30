@@ -918,6 +918,7 @@ section_J() {
   # J3 — devops-engineer.md references — file IS in .agile-flow-overrides so it should be edited (plan §2.7)
   local dev="$REPO_ROOT/.claude/agents/devops-engineer.md"
   if [ -f "$dev" ]; then
+    # shellcheck disable=SC2016
     if grep -qE '^\| `CLOUD_RUN_SERVICE` *\| *`agile-flow-app`' "$dev"; then
       fail J3 "devops-engineer.md" "table still shows 'agile-flow-app' as CLOUD_RUN_SERVICE default (plan §2.7)"
     else
