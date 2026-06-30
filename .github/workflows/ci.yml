@@ -27,14 +27,24 @@ jobs:
             !starters/**
           config: '.markdownlint.json'
 
-  typecheck:
-    name: typecheck
+  # Split from the former `typecheck` umbrella (upstream PR vibeacademy/gembaflow#428;
+  # local backport per fork ticket #233). The two checks below run different things and
+  # fail for different reasons, so they're now separate jobs whose failure messages
+  # match their purpose. Branch protection ruleset 15886599 should require both.
+  json-validate:
+    name: json-validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
       - name: Validate JSON files
         run: ./scripts/validation/validate-json.sh
+
+  version-parity:
+    name: version-parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
 
       - name: Validate version parity
         run: ./scripts/validation/validate-version-parity.sh
