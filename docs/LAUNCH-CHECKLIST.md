@@ -7,9 +7,11 @@ pre-flight before each cohort expansion, not just the first launch.
 
 Project facts referenced below:
 
-- Production URL (current Cloud Run revision): `https://agile-flow-app-heo5ry7rua-uc.a.run.app`
-- Supabase project ref: `gnswmcgaztcxslirulwm`
-- Repo: https://github.com/vibeacademy/cubrox · Board: https://github.com/orgs/vibeacademy/projects/29
+- Production URL (current Cloud Run revision): `https://masterkey-7dit3lvmhq-uc.a.run.app`
+  - Legacy URL `https://agile-flow-app-heo5ry7rua-uc.a.run.app` is orphaned (previous GCP project inaccessible per 2026-06-30 pivot; runtime may still serve stale content but is not managed). See #237.
+- Supabase project ref: `gnswmcgaztcxslirulwm` (unchanged)
+- GCP project: `master-key-501023`
+- Repo: https://github.com/cubrox/cubrox · Board: https://github.com/users/cubrox/projects/2
 
 ---
 

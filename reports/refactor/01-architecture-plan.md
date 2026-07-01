@@ -1,13 +1,62 @@
 # Refactor Plan: `cubrox` -> `masterkey`
 
 **Author:** System Architect persona
-**Date:** 2026-06-29
-**Status:** REVISED (v3) — added Phase -1 (framework alignment) per user request 2026-06-29
+**Date:** 2026-06-29 (v4 revision 2026-06-30)
+**Status:** REVISED (v4) — GCP pivot per operator decision 2026-06-30; v3 in-place-rename assumptions invalidated
 **Scope locked by:** product owner (see task brief)
 
 ---
 
 ## Changelog
+
+### v4.1 — 2026-06-30 — DevOps revision pass (addresses BC1/BC2/BC3 from `reports/refactor/02c-devops-signoff-v4.md`)
+
+DevOps returned **NEEDS_REVISION** on v4 with three blockers, all order-of-operations / executability issues (the v4 architecture itself is sound). This revision addresses each in place:
+
+- **BC1 resolved.** §6 reconciliation rows for #200 and #237 made explicit about the WIF dual-write contract. #200 is **REWORK, not CLOSE** — it executes the `cubrox/masterkey` binding as the dual-write step in the NEW project. #237's row gains a "**#237 body MUST include**" callout listing the corrected text the issue body needs to have (operator/orchestrator must edit #237 to match; this plan tells them what to write). Cross-referenced in §3 Phase 2 step 16's preamble.
+- **BC2 resolved.** Phase 2 / §6 #237 callout now specifies the full 5-env-var (actually 6 if including `GITHUB_REPOSITORY` for Step 7's secret push) invocation contract for `provision-gcp-project.sh`. Confirmed by reading `scripts/provision-gcp-project.sh` lines 402-478: `WIF_OWNER` is sourced from `GITHUB_OWNER` (or legacy `GITHUB_USERNAME`), NOT from `GITHUB_REPO`. `WIF_REPO_NAME` is the bare repo name within the owner. Defaults `ARTIFACT_REPO=agile-flow` (line 60) and `CLOUD_RUN_SERVICE=agile-flow-app` (line 800) WILL fire if not overridden. Required invocation documented in #237's body spec.
+- **BC3 resolved.** Phase 2 step 16's WIF verification mechanism changed from `rollback-production.yml workflow_dispatch` (which mutates traffic — `gcloud run services update-traffic` is not zero-side-effect) to `synthetic-monitor.yml workflow_dispatch` (which auths via WIF and probes the service URL with no traffic-shift). `synthetic-monitor.yml`'s `workflow_dispatch` trigger continues to work even when its `schedule:` block is commented out per Phase 1 step 13. R3 mitigation text updated to match.
+
+**Five new risks added to §4 from DevOps's review:** R21 (AR repo `agile-flow` default), R22 (placeholder Cloud Run service has no env vars; R13 still applies on first real deploy), R23 (API-enable list mismatch between #237 body and the script), R24 (Supabase webhooks unaffected — informational, no action), R25 (legacy GCP project may still be accruing charges despite IAM loss; operator should escalate via billing org).
+
+**Not changed:** every v4 piece DevOps accepted (Phase -1 status, Phase 1 unchanged, Phase 4 collapse to 3 steps, Phase 5 reduction, R19/R20 framing, dependency graph) is preserved unmodified.
+
+### v4 — 2026-06-30 — GCP pivot: legacy production project inaccessible; provision new GCP project as `masterkey` from day 1
+
+**What happened.** The operator lost access to the production GCP project that hosted the `agile-flow-app` Cloud Run service, deployer SA, WIF binding, Artifact Registry repo, and Secret Manager entries. The fork's existing production runtime (`agile-flow-app-heo5ry7rua-uc.a.run.app`) is orphaned — still serving from a no-longer-managed runtime, but we cannot touch it, snapshot it, rename it, or delete it. Operator's locked decisions, captured in #237's body:
+
+1. **Provision a fresh new GCP project as `masterkey` from day 1.** Skip the legacy `agile-flow-app` naming entirely. The Cloud Run service is `masterkey`, the AR repo is `masterkey`, and the GitHub repo `vars` (`CLOUD_RUN_SERVICE=masterkey`, `ARTIFACT_REPO=masterkey`) are set as part of provisioning — not in a separate flip step.
+2. **Supabase project `gnswmcgaztcxslirulwm` is unchanged.** Still accessible, still the data plane. No data migration.
+3. **Close #189 (WIF binding verification) as not-planned** — already done 2026-06-30 — and file #237 for the new-project provisioning. Both actions completed before this v4 revision.
+
+**What this invalidates from v3.** The v3 plan's core assumption ("rename Cloud Run service `agile-flow-app` → `masterkey` in place, keep GCP project ID") no longer holds:
+
+- **Phase 0 step 2 snapshots** of the old service / revisions / SA IAM / secrets list are unobtainable (no access to the old project). The four `snapshots/*.pre-rename.yaml` files are not gettable; Phase 0's `S2`-mandated artifacts collapse to the GitHub-only inventory work (#187).
+- **Phase 2 step 16 (WIF dual-write)** is moot — there's no old `cubrox/cubrox` binding to dual-write from. #237 provisions WIF cleanly in the new project, bound to `cubrox/cubrox` initially (since the repo isn't renamed yet). The remaining decision (folded into Phase 2 below): after `gh repo rename` (step 17 / E3-T2), either add a SECOND WIF binding for `cubrox/masterkey` then prune the old one, or re-run the provision script's WIF setup pointing at the renamed repo.
+- **Phase 3 (Cloud Run + AR preparation)** mostly collapses into #237. The "pre-create masterkey AR repo + Cloud Run service in the same project as the old one" sequence becomes "the new project IS the masterkey project, and its first deploy IS the masterkey service" — no pre-create-then-cutover dance needed. Phase 3 becomes a verification-only stage post-#237: confirm the new service is healthy, capture its URL, update Supabase Auth allowlist with the new URLs, and (if desired) run a dry-run preview-deploy.
+- **Phase 4 (Cutover)** is dramatically simplified. The v3 var-flip race window (B7) does not exist — there is no old GCP project to flip FROM. `vars.CLOUD_RUN_SERVICE=masterkey` and `vars.ARTIFACT_REPO=masterkey` are set as part of #237's GitHub-secrets / vars rotation; from that point onward, all CI deploys (preview AND production) land on the new `masterkey` service. The Phase 1 PR merge's `deploy.yml` run lands on `masterkey` directly — not on `agile-flow-app` first then re-deployed after a flip.
+- **Phase 5 cleanup** loses three of its most destructive steps: we cannot delete the old Cloud Run service (no access), cannot delete the old AR repo (no access), and cannot prune the old WIF binding in the old project (no access). The legacy production URL `agile-flow-app-heo5ry7rua-uc.a.run.app` continues to resolve from the orphaned runtime indefinitely — we have to enumerate external references and either redirect or replace them (new R20).
+
+**What survives unchanged from v3.**
+
+- **Phase -1 (framework alignment to gembaflow v1.5.0)** is DONE — closed via PR #232 (2026-06-30) and follow-up PRs #235 (#234 closed) and #236 (#233 closed). The local fork is at v1.5.0 with `.gembaflow-*` dotfiles.
+- **Phase 1 (codebase rename PR)** is entirely unaffected by the GCP pivot. The 8 sub-tickets (#192-#199) cover identifier renames in `app/`, `tests/`, `templates/`, `ci.yml`, the two `.gembaflow-overrides`-listed scripts, agent persona files, `supabase/config.toml`, and the synthetic-monitor schedule disable. The preview-deploy concern from v3 Phase 1 step 15 (preview goes to the old service) is resolved differently: once #237 lands, the preview-deploy lands on `masterkey` from the start.
+- **Repo rename (#201 / E3-T2)** is unchanged — still `gh repo rename masterkey`, still triggers cascade local-remote updates, still needs Supabase GitHub App allowlist verification (R10).
+- **Project board migration (#202 + #203)** — #202 (create new board) is partially done (board #2 created on the cubrox user account); ticket-content migration of 67 items (#203) is still valid work.
+- **Supabase GitHub App allowlist re-verification** (#209 / E4-T6) still valid post-repo-rename.
+- **Memory MCP audit (#222), ADR-007 (#223), Cloud Logging filter updates (#221)** — all still valid, mostly cosmetic post-pivot.
+- **Synthetic monitor disable/restore (#199 / #215)** still valid — the cron risk during cutover is the same shape regardless of GCP project identity.
+
+**Risk register changes.**
+
+- **R3 (WIF binding correctness)** — RESOLVED. #237 provisions WIF cleanly in the new project from day 1; the dual-write dance is replaced by a single binding that will need adjustment after the repo rename (handled by re-running `scripts/provision-gcp-project.sh` against the new repo name, OR by an explicit add-binding then remove-binding pair).
+- **R19 (NEW)** — GCP billing on the new project. Operator's billing org may have quota or cost surprises (default Cloud Run service quotas vs. project, AR storage cost, Cloud Logging cost). Mitigation: enable billing alerts during #237.
+- **R20 (NEW)** — DNS / external links pointing at the legacy production URL `agile-flow-app-heo5ry7rua-uc.a.run.app`. Anything linking to it will 404 or serve a stale runtime once the new prod URL is live. Need to enumerate external references (`rg agile-flow-app-heo5ry7rua` across the repo + Slack history + any blog posts) and either redirect or accept-and-document.
+- All other risks (R1, R2, R4-R18) that don't depend on the old project survive unchanged.
+
+**Ticket renumbering.** None. v3's E-series IDs are preserved; v4 reuses them with explicit reconciliation actions documented in the new **§6 Backlog reconciliation post-pivot** table below. v3's "Phase 2 step 16" WIF dual-write is removed (now an explicit "DROP" row in §6 against #200); the Phase 4 var-flip steps (E5-T3, E5-T4) become trivial "verify vars already set" rather than actively flipping. Old step numbers 27-40 remain referenced in the §3 phase descriptions but are flagged "OBSOLETE" where the GCP pivot eliminates their substance.
+
+**One-paragraph net effect.** The pivot turns the most operationally fragile parts of v3 (the dual-state Cloud Run window, the var-flip race, the WIF dual-write timing, the destructive Phase 5 deletions) into "non-events" — they collapse into #237's clean from-scratch provisioning. The remaining work is mostly: do Phase 1 (codebase rename) as planned, rename the repo, migrate the board contents, and audit the new production URL. The trade-off is permanent loss of the legacy `agile-flow-app` runtime (we can't snapshot, can't roll back to it, can't gracefully redirect from it) — but since we'd lost ownership anyway, that trade was already made.
 
 ### v3 — 2026-06-29 — added Phase -1 (framework alignment) per user request 2026-06-29
 
@@ -43,12 +92,14 @@
 
 ## 1. Executive summary
 
-- **The rename is a codebase / infra identifier change, not a brand change.** The user-facing product is already "Master Key" in `templates/home.html`, `passages_new.html`, `reading.html`, and `tests/test_home.py`. The string "Cubrox" only appears in technical artifacts: repo slug, package metadata, env-var prefixes, browser globals, Supabase project-id (local), test-seed package name, and developer docs. No marketing copy or sign-in flow needs to change.
-- **Two distinct namespaces collapse into one after this work.** Today the repo is `cubrox/cubrox` on GitHub (confirmed via `git remote`), but the project board is still on the legacy `vibeacademy` org (`orgs/vibeacademy/projects/29`). After the rename, both will live under `cubrox/*` — repo at `cubrox/masterkey`, new board at `orgs/cubrox/projects/<new-id>` with all tickets migrated.
-- **The Cloud Run service is currently named `agile-flow-app`, not `cubrox`.** This is a holdover from the upstream framework defaults (`vars.CLOUD_RUN_SERVICE` was never overridden — `docs/LAUNCH-CHECKLIST.md` line 10 shows the live URL `agile-flow-app-heo5ry7rua-uc.a.run.app`). The rename is therefore *also* the moment we finally give this service a project-specific name. **This is a destructive Cloud Run service rename and the highest-risk part of the plan** (see Risk Register §4).
-- **Ephemeral preview deploys are the most fragile surface.** They depend on a per-service revision tag (`pr-N`) and a comment on the PR. The rename must hit Cloud Run service name + Artifact Registry repo + GitHub Actions `vars` atomically with the repo rename, or in-flight PRs will start failing.
-- **Framework artifacts (Agile Flow) stay named as-is.** `pyproject.toml`'s `name = "agile-flow-gcp"` is the framework template name, not the product. `template-sync.sh` and the upstream URL in `.agile-flow-version` (`vibeacademy/agile-flow`) point at the *upstream framework*, which is unrelated to this product rename. Touching them would break upstream sync. **However**, two `.agile-flow-overrides`-listed scripts (`provision-gcp-project.sh`, `diagnose-cloudrun.sh`) DO need edits — they hardcode `agile-flow-app` as the default service name (B4).
-- **WIF authentication is the highest-leverage "stuck in the middle" failure mode** (B2). The repo pin lives on the deployer SA's IAM policy as a `principalSet` member, not on the WIF provider's attribute condition. Phase 2 step 16 dual-writes the binding for the new repo name BEFORE the rename so no GCP-touching workflow ever sees an unauthorized request.
+**v4 update (2026-06-30):** the GCP pivot reshapes this summary. Bullets below are kept for v3 context; v4-specific framing is added inline as **v4 notes**.
+
+- **The rename is a codebase / infra identifier change, not a brand change.** The user-facing product is already "Master Key" in `templates/home.html`, `passages_new.html`, `reading.html`, and `tests/test_home.py`. The string "Cubrox" only appears in technical artifacts: repo slug, package metadata, env-var prefixes, browser globals, Supabase project-id (local), test-seed package name, and developer docs. No marketing copy or sign-in flow needs to change. **v4 unchanged.**
+- **Two distinct namespaces collapse into one after this work.** Today the repo is `cubrox/cubrox` on GitHub (confirmed via `git remote`), but the project board is still on the legacy `vibeacademy` org (`orgs/vibeacademy/projects/29`). After the rename, both will live under `cubrox/*` — repo at `cubrox/masterkey`, new board at `users/cubrox/projects/<new-id>` (note: cubrox is a user account, not an org — board #2 already created 2026-06-30). All tickets migrated via #203.
+- ~~**The Cloud Run service is currently named `agile-flow-app`, not `cubrox`.**~~ **v4 REPLACES:** The legacy Cloud Run service `agile-flow-app` lives in a GCP project the operator lost access to 2026-06-30. It is orphaned and outside our control. #237 provisions a brand-new GCP project, and the Cloud Run service in that project is named `masterkey` from day 1. **There is no destructive Cloud Run service rename in v4** — the new service simply doesn't exist until #237 creates it.
+- **Ephemeral preview deploys are the most fragile surface.** They depend on a per-service revision tag (`pr-N`) and a comment on the PR. **v4 update:** the atomic-flip-with-rename concern is dissolved — once #237 sets `vars.CLOUD_RUN_SERVICE=masterkey`, all preview deploys go to the new service from then onward, with no flip event to coordinate.
+- **Framework artifacts (Gemba Flow) stay named as-is.** `pyproject.toml`'s `name = "agile-flow-gcp"` is the framework template name, not the product. (Note: v3 said "Agile Flow"; Phase -1's framework upgrade made this "Gemba Flow" at the framework layer.) **However**, two `.gembaflow-overrides`-listed scripts (`provision-gcp-project.sh`, `diagnose-cloudrun.sh`) DO need edits — they hardcode `agile-flow-app` as the default service name (B4). v4 note: `provision-gcp-project.sh` was used to provision the new project via #237, so its rename matters going forward for any future operator re-running it.
+- **WIF authentication is no longer the highest-leverage "stuck in the middle" failure mode in v4.** The fresh provisioning in #237 establishes a known-good baseline; Phase 2 step 16's dual-write (now executed against the new project, not the legacy one) handles the residual repo-rename risk. **The new highest-leverage risk in v4 is R19 (GCP billing surprises) and R20 (orphaned legacy URL still serving from the inaccessible project).**
 
 ---
 
@@ -198,6 +249,8 @@ Numbered, with explicit rollback points (RB-N) and "what's safe to interleave" a
 
 ### Phase -1: Framework alignment (gembaflow v1.5.0)
 
+**v4 STATUS: COMPLETED (2026-06-30).** Landed via PRs #232, #235, #236. Closed tickets: #224 (epic), #225-#231 (sub-tasks), #233 (json-validate ruleset split), #234 (bot.reviewer alignment). The local fork is at gembaflow v1.5.0 with `.gembaflow-*` metadata. The body of this section is retained as historical record; no further action required.
+
 This phase exists because upstream renamed `vibeacademy/agile-flow` → `vibeacademy/gembaflow` and shipped v1.5.0 while we sat on v1.3.0. The local fork still has `.agile-flow-*` metadata files and CLAUDE.md / UPSTREAM.md / VERSIONING.md still say "Agile Flow". **This phase lands before the existing Phase 0** because the masterkey rename (Phases 0-5 below) touches the same `.agile-flow-overrides` file and the same agent persona files that the v1.5.0 sync auto-migrates. Sequencing matters: do the framework alignment first, get a clean baseline at v1.5.0 with `.gembaflow-*` dotfiles, THEN start the masterkey rename. The reverse order produces dual-state and merge-conflict pain.
 
 #### What changes
@@ -286,35 +339,25 @@ Pre-Phase-(-1) SHA captured in step (-1).1. Rollback is `git reset --hard <pre-P
 
 ### Phase 0 — Pre-flight (read-only, no production impact)
 
-1. Inventory all open + closed tickets on `orgs/vibeacademy/projects/29`. Export to a local JSON file. (`gh api graphql` with `node(id: $projectId) { items(...) }`.)
-2. Snapshot the existing state into `snapshots/` (per S2):
+**v4 STATUS: MOSTLY OBSOLETE.** Steps 2-4 (GCP snapshots, WIF binding shape verification, Cloud Logging enumeration) require access to the old GCP project, which the operator no longer has. They are unobtainable and dropped — see §6 reconciliation for ticket-level actions. The only steps still valid in v4 are step 1 (GitHub board inventory — #187), step 5 (open-PR check), and step 6 (forks enumeration). v4 Phase 0 collapses to "GitHub-side inventory only."
+
+1. Inventory all open + closed tickets on `orgs/vibeacademy/projects/29`. Export to a local JSON file. (`gh api graphql` with `node(id: $projectId) { items(...) }`.) **STILL VALID.**
+2. ~~Snapshot the existing state into `snapshots/`~~ **OBSOLETE — old project inaccessible.** All four snapshot artifacts (`agile-flow-app.pre-rename.yaml`, `revisions.pre-rename.yaml`, `sa-iam.pre-rename.yaml`, `secrets.pre-rename.yaml`) are unobtainable. Rollback artifacts are now only the snapshots of the NEW project that #237 takes after provisioning — which is a different category of artifact (forward-looking baseline, not backward-looking rollback).
    - `gcloud run services describe agile-flow-app --region=us-central1 --format=yaml > snapshots/agile-flow-app.pre-rename.yaml`
    - `gcloud run revisions list --service=agile-flow-app --region=us-central1 --format=yaml > snapshots/revisions.pre-rename.yaml`
    - `gcloud iam service-accounts get-iam-policy $SA_EMAIL --format=yaml > snapshots/sa-iam.pre-rename.yaml`
    - `gcloud secrets list --project=$GCP_PROJECT_ID --format=yaml > snapshots/secrets.pre-rename.yaml`
    These are the rollback artifacts if the new service goes sideways.
-3. **Verify WIF wiring.** Confirm the binding shape matches what `provision-gcp-project.sh` provisioned:
-   ```bash
-   SA_EMAIL=$(gcloud secrets versions access latest --secret=gcp-deployer-sa-email --project=$GCP_PROJECT_ID 2>/dev/null) \
-     || SA_EMAIL="<read from GCP_SERVICE_ACCOUNT secret>"
-   gcloud iam service-accounts get-iam-policy "$SA_EMAIL" \
-     --project=$GCP_PROJECT_ID --format=json \
-     | jq '.bindings[] | select(.role | IN("roles/iam.workloadIdentityUser","roles/iam.serviceAccountTokenCreator"))'
-   ```
-   Expect to see `principalSet://.../attribute.repository/cubrox/cubrox` for BOTH roles. Provider's attribute condition is `assertion.repository != ''` (trivially true) — confirm with `gcloud iam workload-identity-pools providers describe ... --format=value(attributeCondition)`. **There is nothing to edit at the provider level**; the work is at the SA IAM binding (Phase 2 step 16).
-4. Enumerate Cloud Logging / Monitoring assets (resolved Q7):
-   ```bash
-   gcloud logging metrics list --project=$GCP_PROJECT_ID
-   gcloud alpha monitoring policies list --project=$GCP_PROJECT_ID --format='value(displayName,combiner)'
-   gcloud monitoring dashboards list --project=$GCP_PROJECT_ID --format='value(displayName)'
-   ```
-   Most likely returns empty (per ADR-004); if non-empty, queue those entries for Phase 5 step 39.
-5. Confirm zero open PRs (preview deploys in flight are a hazard for Phase 4). If any exist, ask their authors to rebase after the rename — don't try to migrate live revision tags. Verified at v1 review time: `gh pr list --state open` returns `[]`.
-6. Enumerate external forks: `gh api repos/cubrox/cubrox/forks --jq '.[].full_name'` (per R15). If any exist, notify the fork owners.
+3. ~~**Verify WIF wiring.**~~ **OBSOLETE — old project inaccessible.** Closed via #189 (not-planned) 2026-06-30. The new project's WIF wiring is now an output of #237's provisioning, not a pre-flight verification.
+4. ~~Enumerate Cloud Logging / Monitoring assets~~ **OBSOLETE — old project inaccessible.** The expected output was empty anyway (per ADR-004); the new project starts empty by construction. Phase 5 step 39 collapses to a one-line confirmation that the new project's logging filters reference `service_name="masterkey"` correctly (which they do by default, since the service was created with that name).
+5. Confirm zero open PRs (preview deploys in flight are a hazard for the cutover window). If any exist, ask their authors to rebase after #237 lands and `vars.CLOUD_RUN_SERVICE` is set — don't leave preview deploys pointing at a non-existent old service. **STILL VALID.**
+6. Enumerate external forks: `gh api repos/cubrox/cubrox/forks --jq '.[].full_name'` (per R15). If any exist, notify the fork owners. **STILL VALID.**
 
 **RB-0:** Trivial — nothing changed.
 
 ### Phase 1 — Code-only changes on a feature branch
+
+**v4 STATUS: STILL VALID, unchanged scope.** The codebase rename PR (E2-T1 through E2-T8 / #192-#199) is GCP-independent. The only v3 detail that changes is Phase 1 step 15's preview-deploy expectation: in v3 the preview was expected to land on `agile-flow-app`; in v4 it lands on `masterkey` from the start (assuming #237 lands before Phase 1 PR is opened). The "live no-op proof" framing changes to "preview deploy validates new-project plumbing simultaneously with code rename."
 
 7. Branch: `feature/refactor-cubrox-to-masterkey`.
 8. Apply ALL §2.2 code/test/template renames AND `.github/workflows/ci.yml:218,307,315` rename (B1). Drive via:
@@ -330,26 +373,34 @@ Pre-Phase-(-1) SHA captured in step (-1).1. Rollback is `git reset --hard <pre-P
 12. Update `supabase/config.toml` `project_id`.
 13. **Disable synthetic monitor schedule for the cutover window** (resolved Q9): comment out the `schedule:` block in `.github/workflows/synthetic-monitor.yml` on this branch. Add a TODO in the PR body to restore it in a small follow-up PR after Phase 4 step 32.
 14. Run full local test suite: `uv run pytest`, `uv run ruff check`, `uv run ruff format --check`, `uv run mypy app/`, and `tests/a11y` (locally against `supabase start`).
-15. Open PR. **The preview deploy on this PR will still go to the old `agile-flow-app` service** because we haven't flipped `vars.CLOUD_RUN_SERVICE` yet. That's the validation: a green preview here proves the code rename is functionally a no-op.
+15. Open PR. **v4 update:** Once #237 is merged (sets `vars.CLOUD_RUN_SERVICE=masterkey` and `vars.ARTIFACT_REPO=masterkey`), the preview deploy on this PR lands on the NEW `masterkey` Cloud Run service in the new GCP project from the start. A green preview validates both the code rename AND the new-project plumbing simultaneously. (v3 narrative: "preview goes to old `agile-flow-app` to prove rename is a no-op, then re-deploy after var flip" — no longer applicable in v4.)
 
 **RB-1:** Close PR, no impact. Nothing has been deployed.
 
-### Phase 2 — GitHub repo + board migration + WIF dual-write (independent of code)
+### Phase 2 — GitHub repo + board migration + WIF re-bind for renamed repo (independent of code)
 
-Can run in parallel with Phase 1 (the code-only branch). Four operations; order matters within this phase — WIF binding MUST land before the repo rename.
+Can run in parallel with Phase 1 (the code-only branch). v4 reshapes step 16: the v3 "dual-write before rename" is replaced by "re-point the freshly-provisioned WIF binding at the renamed repo." Order within this phase still matters — WIF must work for `cubrox/masterkey` before the first CI run on the renamed repo, otherwise every workflow that authenticates to GCP starts failing with `iam.serviceAccounts.getAccessToken denied`.
 
-16. **WIF dual-write (NEW step, was 11.5 in DevOps review — must happen BEFORE the repo rename).** Add a parallel `principalSet` IAM binding on the deployer SA for `cubrox/masterkey` with BOTH `roles/iam.workloadIdentityUser` AND `roles/iam.serviceAccountTokenCreator`:
+16. **WIF re-bind after repo rename (v4 REPLACES v3's dual-write).** #237 provisions a single WIF binding on the new deployer SA for `principalSet://.../attribute.repository/cubrox/cubrox` (matching the repo name at provisioning time). Once #201 (repo rename) lands, GitHub's OIDC token will present `repository = cubrox/masterkey`, which won't match. **Architect's chosen approach: dual-write the new binding BEFORE running the repo rename, then prune the old one in Phase 5** — same shape as v3's plan, just executed in the new project instead of the old one. Reasons:
+    1. **Symmetry with the rest of the plan.** Every other piece of Phase 2 dual-writes (Supabase Auth allowlist keeps old + new entries, board exists in both places during migration). A WIF dual-write keeps the mental model uniform.
+    2. **Recoverability.** If the repo rename half-completes (e.g., GitHub UI hangs after the rename succeeds but before our local remote update), having both bindings live means CI doesn't immediately go red. Single-binding-pointed-at-`cubrox/masterkey` would mean any in-flight workflow run keyed to the old `cubrox/cubrox` reference fails.
+    3. **Cheaper than re-running `provision-gcp-project.sh`.** Re-running the provision script would attempt to re-create the SA, re-create the WIF pool, etc. — most steps would no-op idempotently, but it's a heavier hammer than `add-iam-policy-binding`.
+    4. **No cost overhead.** IAM bindings are free; the dual-state lasts only until Phase 5.
+
+    Concrete steps (executed against the NEW GCP project provisioned by #237):
     ```bash
-    SA_EMAIL=$(gcloud secrets versions access latest --secret=gcp-deployer-sa-email --project=$GCP_PROJECT_ID 2>/dev/null) \
+    SA_EMAIL=$(gcloud secrets versions access latest --secret=gcp-deployer-sa-email --project=$NEW_GCP_PROJECT_ID 2>/dev/null) \
       || SA_EMAIL="<read from GCP_SERVICE_ACCOUNT secret>"
-    PROJECT_NUMBER=$(gcloud projects describe $GCP_PROJECT_ID --format='value(projectNumber)')
+    PROJECT_NUMBER=$(gcloud projects describe $NEW_GCP_PROJECT_ID --format='value(projectNumber)')
     NEW_MEMBER="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/attribute.repository/cubrox/masterkey"
     for role in roles/iam.workloadIdentityUser roles/iam.serviceAccountTokenCreator; do
       gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
-        --role="$role" --member="$NEW_MEMBER" --project=$GCP_PROJECT_ID
+        --role="$role" --member="$NEW_MEMBER" --project=$NEW_GCP_PROJECT_ID
     done
     ```
-    The old `cubrox/cubrox` binding remains intact in parallel — both names resolve during the grace window. **Verify:** trigger `workflow_dispatch` on `rollback-production.yml` with `revision=<currentRevision>` and `reason='WIF binding verification'`. This auths to GCP but only acts on user-confirmed input — safe to dry-run. If the auth step passes, the binding is plumbed.
+    Old `cubrox/cubrox` binding stays intact in parallel until Phase 5 step 38. **Verify (v4.1 — BC3 fix):** trigger `workflow_dispatch` on `synthetic-monitor.yml` against the new service. It auths via WIF (lines 59-61 mirror `deploy.yml`), resolves the service URL via `gcloud run services describe masterkey`, and runs the auth probe. **Why this and not `rollback-production.yml`:** `rollback-production.yml` does NOT have a dry-run mode — supplying `revision=<currentRevision>` causes `gcloud run services update-traffic` (lines 100-108) followed by a smoke test (lines 127-146). On a fresh single-revision `masterkey` service that's an operational no-op, but it's NOT side-effect-free; on a multi-revision service or with a typo'd revision name, it actively reroutes traffic. `synthetic-monitor.yml workflow_dispatch` is side-effect-free except for sending a magic-link email to the smoke-test address (fine). The fact that Phase 1 step 13 commented out `synthetic-monitor.yml`'s `schedule:` block doesn't disable `workflow_dispatch` — those are independent triggers. If the WIF probe passes, the new binding is plumbed. **Recovery if it fails (per NS5):** re-run `scripts/provision-gcp-project.sh` with `GCP_PROJECT_ID=$NEW_GCP_PROJECT_ID GITHUB_OWNER=cubrox GITHUB_REPO=masterkey ARTIFACT_REPO=masterkey CLOUD_RUN_SERVICE=masterkey GITHUB_REPOSITORY=cubrox/masterkey` set — the script's idempotency (lines 414, 427) skips the pool/provider but the SA binding loop (line 466) adds the missing `cubrox/masterkey` principalSet binding without manual `gcloud iam` surgery.
+
+    **Why this instead of "re-provision in place against the renamed repo":** the operator's `scripts/provision-gcp-project.sh` reads `GITHUB_REPO` once and bakes it into the WIF binding. Re-running with `GITHUB_REPO=cubrox/masterkey` would add the new binding but would not remove the old one (the script is additive). Same net effect as the explicit `add-iam-policy-binding` calls above, but with hundreds of lines of script execution and the side-effect of re-touching the SA, AR repo, and project APIs (most no-op, some emit log noise). Explicit two-line bindings are auditable and minimal.
 17. **Repo rename:** `gh repo rename masterkey --repo cubrox/cubrox` (or via GH UI). GitHub auto-redirects git clone URLs for 30 days, but:
     - **Immediately** update local remotes on every developer machine: `git remote set-url origin git@github.com:cubrox/masterkey.git`.
     - Verify branch-protection ruleset (id 15886599) still applies: `gh api repos/cubrox/masterkey/rulesets` (per S3).
@@ -361,10 +412,26 @@ Can run in parallel with Phase 1 (the code-only branch). Four operations; order 
 
 ### Phase 3 — Cloud Run + Artifact Registry preparation (no traffic yet)
 
-20. Create new Artifact Registry repo `masterkey` in the same region: `gcloud artifacts repositories create masterkey --repository-format=docker --location=us-central1`.
-21. Grant the runtime SA `roles/artifactregistry.reader` on the new repo (usually inherited from project-level, but verify).
-22. **Build + push** an image to the new repo manually as a smoke test: `docker build -t us-central1-docker.pkg.dev/$PROJECT/masterkey/masterkey:smoke . && docker push ...`.
-23. **Pre-create** the Cloud Run service `masterkey` with a placeholder revision pointing at the smoke image, mounting the same secrets as `agile-flow-app`. **CRITICAL (B3 / R13):** match `deploy.yml`'s env-var TYPES exactly — `DATABASE_URL` and `ANTHROPIC_API_KEY` MUST be plain literals via `--set-env-vars`, NEVER `--set-secrets`. Cloud Run's literal-vs-secret env-var type is sticky per name; switching requires a destructive service recreate. Production currently uses literals (per `deploy.yml:216-217`); the placeholder must do the same:
+**v4 STATUS: REPLACED BY #237.** Steps 20-23 in v3 (pre-create AR repo, grant runtime SA reader, smoke-push image, pre-create Cloud Run service with sticky env-var types) are all absorbed into #237's provisioning of the new GCP project. There is no parallel "old service serving prod while we pre-create the new" window because there's no old service we can touch. Phase 3 collapses to a verification-only stage that runs **after #237 lands**:
+
+**v4 Phase 3 (replacement) — verification-only checklist:**
+
+1. Confirm `masterkey` AR repo exists in the new project: `gcloud artifacts repositories describe masterkey --location=us-central1 --project=$NEW_GCP_PROJECT_ID`.
+2. Confirm `masterkey` Cloud Run service exists and serves: `gcloud run services describe masterkey --region=us-central1 --project=$NEW_GCP_PROJECT_ID --format='value(status.url)'` returns a URL; `curl $URL/api/health` returns 200; `curl $URL/api/health/db` returns 200.
+3. **Critically:** verify env-var TYPES on the new service match `deploy.yml`'s shape (R13 still applies — the new project is fresh, but the first deploy still locks in env-var types per name). `gcloud run services describe masterkey --format=yaml | grep -E 'name: (DATABASE_URL|ANTHROPIC_API_KEY)' -A 2` — values must be literals, not `valueFrom: secretKeyRef:`. If #237 set them as secret-refs, the next `deploy.yml` will fail with the sticky-type error and we have to destructively recreate the service (which is much less painful in v4 than v3, but still annoying). **Architect's recommendation:** add an explicit check to #237's Definition of Done so this is caught at provisioning time, not at first-deploy time.
+4. Capture the new service URL `$NEW_URL` and pin it into `docs/LAUNCH-CHECKLIST.md` line 10 (and lines 12, 45-46, 51) plus `CLAUDE.md` Project Information block (per S6).
+5. Add Supabase Auth redirect allowlist entries for the new URLs (R4 + R12 — still valid):
+   - Production: `https://masterkey-<hash>-uc.a.run.app/auth/callback`
+   - Preview pattern: `https://pr-*---masterkey-*-uc.a.run.app/auth/callback`
+   - Do NOT remove old `agile-flow-app-*` entries — they're harmless (the old service still receives traffic from anyone with a stale link, and removing them only matters once the legacy runtime is decommissioned, which we cannot control).
+6. (Optional) Run a dry-run preview-deploy PR (mirrors v3's #208 / E4-T5). With `vars.CLOUD_RUN_SERVICE=masterkey` already set, this exercises preview-deploy + preview-cleanup + Supabase branching end-to-end. Less critical in v4 (no race condition to verify) but useful as a smoke test before Phase 1 PR lands. If skipped, the Phase 1 PR's own preview deploy serves the same role.
+
+The original step numbers (20-26) are OBSOLETE; they referenced operations against the old project that no longer exist. Below are the v3 step descriptions preserved as historical commentary — none should be executed in v4.
+
+~~20. Create new Artifact Registry repo `masterkey` in the same region~~ **OBSOLETE — folded into #237.**
+~~21. Grant the runtime SA `roles/artifactregistry.reader`~~ **OBSOLETE — folded into #237.**
+~~22. Build + push an image to the new repo manually as a smoke test~~ **OBSOLETE — first preview-deploy or production deploy serves this role.**
+~~23. Pre-create the Cloud Run service `masterkey` with a placeholder revision~~ **OBSOLETE — #237's first deploy creates the service; placeholder no longer needed since there's no old service serving prod to coexist with.**
     ```
     gcloud run deploy masterkey \
       --image=us-central1-docker.pkg.dev/$PROJECT/masterkey/masterkey:smoke \
@@ -378,29 +445,34 @@ Can run in parallel with Phase 1 (the code-only branch). Four operations; order 
       --no-traffic
     ```
     (Per resolved Q10: `--min-instances=0` for the placeholder, not 1 — the placeholder shouldn't actually run the smoke image hot. `deploy.yml:168` will flip it to 1 on the real Phase 4 deploy.) Then `--to-latest` traffic shift, but **only on the new service in isolation** — `agile-flow-app` still serves prod.
-24. Curl the new service's URL — `/api/health` (200), `/api/health/db` (200), then `/` (200, sees Master Key landing). **Capture the new URL** for `docs/LAUNCH-CHECKLIST.md` (B5):
+24. **v4 NOTE:** still valid as a verification step (folded into the "v4 Phase 3 verification-only checklist" above), but no longer "after pre-creating the service" — runs against the only-and-only `masterkey` service. Curl the new service's URL — `/api/health` (200), `/api/health/db` (200), then `/` (200, sees Master Key landing). **Capture the new URL** for `docs/LAUNCH-CHECKLIST.md` (B5):
     ```bash
     NEW_URL=$(gcloud run services describe masterkey --region=us-central1 --format='value(status.url)')
     echo "$NEW_URL"  # e.g. https://masterkey-aBcDeFgH-uc.a.run.app
     ```
     Amend the still-open Phase 1 PR (or open a small doc PR if Phase 1 has already merged) to pin `$NEW_URL` into `docs/LAUNCH-CHECKLIST.md` line 10, and `CLAUDE.md`'s Project Information block per S6. Update §2.C health-probe instructions (lines 45-46) and §2.D auth-test (line 51) of the launch checklist to reference `$NEW_URL`.
-25. **Dry-run preview-deploy + preview-cleanup against the new service (was Phase 4 R1 mitigation; now an explicit numbered step per S4).** Open a throwaway PR with a trivial change AND a `supabase/migrations/<timestamp>_rename_smoke.sql` empty file (per R10 — exercises the Supabase branching path). Confirm:
-    - First push (with `vars.CLOUD_RUN_SERVICE` still `agile-flow-app`): preview goes to the old service. ✓
-    - Flip `vars.CLOUD_RUN_SERVICE=masterkey` temporarily, push a new commit: preview-deploy run pushes to `masterkey/masterkey:pr-N-<sha>`, tags `masterkey` service, smoke-test passes, PR comment updates in place (verified by R1's marker-string match in v1). ✓
-    - Close the PR: preview-cleanup runs against `masterkey`, finds and removes the `pr-N` tag (handles missing-tag idempotently per workflow code). ✓
-    - **Flip the var BACK to `agile-flow-app` immediately** after the dry-run completes — Phase 4 step 27 needs the old var still in effect when Phase 1 PR merges.
-    - Label the dry-run PR `phase3-dryrun` so cleanup is easy to confirm.
-26. **Add the new service URL + preview pattern to the Supabase Auth redirect allowlist** (per R4 + R12). Both production URLs allowed simultaneously; old ones stay until Phase 5 cleanup. Patterns to add: `https://masterkey-<hash>-uc.a.run.app/auth/callback` (production) AND `https://pr-*---masterkey-*-uc.a.run.app/auth/callback` (preview).
+25. **v4 SIMPLIFIED:** Dry-run preview-deploy is now OPTIONAL. The var-flip race window that motivated v3's explicit dry-run does not exist in v4 (vars are at their target `masterkey` values from #237 onward; there's no flip-and-flip-back dance). If executed as a smoke test: open a throwaway PR with a trivial change plus a `supabase/migrations/<timestamp>_rename_smoke.sql` empty file (per R10 — exercises Supabase branching), confirm preview lands on `masterkey`, close PR, confirm cleanup. Skip the "flip var back" step. Label the dry-run PR `phase3-dryrun`. If skipped, Phase 1 PR's own preview deploy serves the same role.
+26. **v4 STILL VALID:** Add the new service URL + preview pattern to the Supabase Auth redirect allowlist (per R4 + R12). Patterns to add: `https://masterkey-<hash>-uc.a.run.app/auth/callback` (production) AND `https://pr-*---masterkey-*-uc.a.run.app/auth/callback` (preview). v4 note: old `agile-flow-app-*` entries can stay indefinitely since the legacy runtime is orphaned outside our control — removing them gains nothing operational.
 
-**RB-3:** Delete the `masterkey` service + Artifact Registry repo. Revert the temporary var flip done in step 25. No prod impact (the old `agile-flow-app` service was never touched).
+**RB-3 (v4):** Delete the `masterkey` service + Artifact Registry repo in the new project (if needed during early provisioning). No old prod to fall back to — the orphaned legacy runtime is not a rollback target since we cannot manage it. Effective rollback in v4 is "fix forward in the new project."
 
-### Phase 4 — Cutover (re-sequenced per B7 to eliminate the var-flip-before-merge race)
+### Phase 4 — Cutover (v4 dramatically simplified — no var-flip dance, no dual-state race)
 
-The v1 ordering had a race window where `vars.CLOUD_RUN_SERVICE=masterkey` could be live while the Phase 1 PR was still unmerged — meaning any preview-deploy fired between var flip and merge would try to push to the new AR/service with OLD code (which still references `CUBROX_TEST_SEED_ENABLED`). The new ordering ships exactly one risk per step.
+**v4 STATUS: COLLAPSED.** v3's B7-mandated re-sequencing (merge PR → verify old service → flip vars → trivial commit → verify new service) existed to eliminate a race window where `vars.CLOUD_RUN_SERVICE=masterkey` could be live while the Phase 1 PR was still unmerged. In v4 there is no flip — the vars are set as part of #237 and stay set. The Phase 1 PR's `deploy.yml` run lands on `masterkey` directly. The cutover collapses to: merge Phase 1 PR → verify new service → restore synthetic monitor.
 
-27. **Merge the Phase 1 PR** (vars STILL point at `agile-flow-app`). The merge triggers `deploy.yml`, which builds the post-rename code and deploys to the **old** `agile-flow-app` service. This is the live verification that the code rename is a functional no-op (satisfies Phase 1 step 15's acceptance criterion against production rather than just preview).
-28. **Verify production health on the old service URL** after the merge-triggered deploy. `curl https://agile-flow-app-heo5ry7rua-uc.a.run.app/api/health` and `/api/health/db`; run `scripts/smoke_auth.py` against the old URL. If any of these fail, **stop and roll back the merge** — do not flip vars while production is unhealthy.
-29. **Flip GitHub vars** (instantaneous, atomic from the deploy pipeline's perspective):
+**v4 Phase 4 (replacement, 3 steps):**
+
+1. **Merge the Phase 1 PR.** Triggers `deploy.yml`, which (with vars already set to `masterkey` from #237) builds the post-rename code into `masterkey/masterkey:<sha>` and deploys to the `masterkey` Cloud Run service in the new GCP project. The first real production deploy.
+2. **Verify `masterkey` production health.** `curl $NEW_URL/api/health`, `/api/health/db`, `/`. Run `scripts/smoke_auth.py` against `$NEW_URL`. Confirm Supabase magic-link round-trip succeeds (synthetic monitor is still disabled per E2-T8 — manual smoke is the only signal until step 3 runs).
+3. **Re-enable synthetic monitor** (E5-T6 / #215 — still valid). Open small follow-up PR restoring `schedule:` block. Next :17-past-hour run hits `masterkey`-resolved URL automatically.
+
+Steps 4-6 (announce new URL, prune Supabase allowlist 24-48h post-cutover, etc.) are still valid but mostly cosmetic in v4.
+
+**v3 step descriptions preserved as historical commentary — none should be executed in v4 against the original GCP project:**
+
+~~27. Merge the Phase 1 PR (vars STILL point at agile-flow-app)~~ **OBSOLETE — vars already point at masterkey from #237.** Merge still happens; just no longer carries the "live no-op proof against old service" framing.
+~~28. Verify production health on the old service URL~~ **OBSOLETE — old service inaccessible.** v4 verifies on `masterkey` only.
+29. ~~Flip GitHub vars~~ **OBSOLETE — done by #237.**
     ```bash
     gh variable set CLOUD_RUN_SERVICE --body masterkey
     gh variable set ARTIFACT_REPO --body masterkey
@@ -411,29 +483,41 @@ The v1 ordering had a race window where `vars.CLOUD_RUN_SERVICE=masterkey` could
 33. **Inform users / update external URL references.** If a custom domain is in play (currently isn't), no action. If we're on `*.run.app`, the user-facing URL has changed — announce the new URL. Update any docs that reference the production URL but were not touched in Phase 3 step 24.
 34. **Keep both Supabase Auth allowlist entries** (old + new, production + preview patterns) for 24-48h post-cutover. Phase 5 step 37 prunes the old ones.
 
-**RB-4 (critical rollback):**
-- If step 30's `deploy.yml` run fails: the new service either has a bad revision (use `gcloud run services update-traffic masterkey --to-revisions=<prev>=100`) or never deployed (the old service is still serving prod via the deploy from step 27, the rename is just stalled — fix the workflow and re-run).
-- If the deploy succeeds but real traffic shows breakage: `gh variable set CLOUD_RUN_SERVICE --body agile-flow-app` and `gh variable set ARTIFACT_REPO --body agile-flow`. Push another trivial commit to trigger `deploy.yml`. The old service was never deleted (Phase 5 hasn't run), so this is a clean revert.
-- The new service can be deleted once safe: `gcloud run services delete masterkey`.
-- If WIF auth fails despite the dual-write: confirm the new binding actually applied via `gcloud iam service-accounts get-iam-policy $SA_EMAIL`. The provider's attribute condition is trivially true, so the only possible cause is the binding not being present.
+**RB-4 (v4 — critical rollback):**
+- If Phase 1 PR merge's `deploy.yml` run fails: the new `masterkey` service either has a bad revision (use `gcloud run services update-traffic masterkey --to-revisions=<prev>=100 --region=us-central1`) or never deployed (fix the workflow and re-run). **There is no fallback to the old service** — the legacy `agile-flow-app` runtime in the inaccessible project is not a managed target.
+- If the deploy succeeds but real traffic shows breakage: fix-forward in the new project. Roll back the merge via `git revert` PR; the previous `masterkey` revision will be re-deployed.
+- If WIF auth fails despite the new binding: confirm the binding actually applied via `gcloud iam service-accounts get-iam-policy $SA_EMAIL --project=$NEW_GCP_PROJECT_ID`. The provider's attribute condition is trivially true (same as v3); the only possible cause is the binding not being present in the new project.
 
-### Phase 5 — Cleanup (30 days after cutover per resolved Q4, no rollback expected)
+### Phase 5 — Cleanup (v4 substantially simplified — no old project to clean up)
 
-35. Delete the old Cloud Run service: `gcloud run services delete agile-flow-app --region=us-central1`.
-36. Delete the old Artifact Registry repo (after confirming no images are pulled from it): `gcloud artifacts repositories delete agile-flow --location=us-central1`. Note: this is destructive and loses image history; archive the latest few image manifests first if forensics matter. **30-day grace window** lets us re-pull any commit-SHA-tagged image for incident triage.
-37. Remove the old `agile-flow-app-*.run.app` production URL AND the old `pr-*---agile-flow-app-*` preview pattern from the Supabase Auth redirect allowlist (per R12).
-38. **Remove the old WIF binding:**
+**v4 STATUS: ~50% of v3 work eliminated.** Steps 35, 36, 38 (delete old Cloud Run service, delete old AR repo, prune old WIF binding) all assumed access to the old GCP project. v4 cannot execute them — the project is inaccessible. The legacy runtime continues to serve indefinitely from a no-longer-managed deployment until Google reclaims it for non-payment or quota-eviction (timing unknown — could be months or years).
+
+What's still valid in v4 Phase 5:
+
+1. **WIF binding cleanup (v4-style).** If Phase 2 step 16 dual-wrote a `cubrox/masterkey` binding alongside the original `cubrox/cubrox` binding in the NEW project, prune the old one once stable:
     ```bash
     OLD_MEMBER="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/attribute.repository/cubrox/cubrox"
     for role in roles/iam.workloadIdentityUser roles/iam.serviceAccountTokenCreator; do
       gcloud iam service-accounts remove-iam-policy-binding "$SA_EMAIL" \
-        --role="$role" --member="$OLD_MEMBER" --project=$GCP_PROJECT_ID
+        --role="$role" --member="$OLD_MEMBER" --project=$NEW_GCP_PROJECT_ID
     done
     ```
-39. Update Cloud Logging saved queries, dashboards, and any alert policies enumerated in Phase 0 step 4 to reference `resource.labels.service_name="masterkey"`. Likely a no-op per ADR-004 (no custom alerts/dashboards configured), but verify.
-40. Close the `cubrox/cubrox` repo redirect note in CHANGELOG.
+2. **Remove old Supabase Auth allowlist entries (optional).** v4 note: this is a judgement call — the `agile-flow-app-*` entries are harmless and removing them gains nothing since the legacy URL is orphaned. Architect's recommendation: leave them for 6+ months, then audit.
+3. **Memory MCP audit.** Run `prune-memory` pass to rename "Cubrox" entities (R7). STILL VALID.
+4. **ADR-007 "Rename to Master Key / masterkey".** Write the architectural ADR per §2.6. STILL VALID. v4 version of the ADR should explicitly document the GCP pivot (project-lost-then-re-provisioned) as part of the consequences, since it's now a load-bearing fact of the rename history.
+5. **Doc / link cleanup.** v4 NEW scope — enumerate external references to `agile-flow-app-heo5ry7rua-uc.a.run.app` (R20) and either redirect them (where we control the surface) or document them as legacy (where we don't). `rg agile-flow-app-heo5ry7rua` across the repo; check team-comms surfaces.
+6. **CHANGELOG entry.** Close out the rename with a CHANGELOG note documenting the new production URL + the orphaned legacy URL.
 
-**RB-5:** Past this point, rollback means re-creating from snapshots (Phase 0 step 2). Don't run Phase 5 until Phase 4 has been stable for at least 30 days.
+v3 step descriptions preserved as historical commentary — none should be executed in v4:
+
+~~35. Delete the old Cloud Run service `gcloud run services delete agile-flow-app`~~ **N/A — old project inaccessible.**
+~~36. Delete the old Artifact Registry repo~~ **N/A — same reason.**
+~~37. Remove the old `agile-flow-app-*.run.app` allowlist entries from Supabase~~ **Optional in v4; see step 2 above.**
+~~38. Remove the old WIF binding for `cubrox/cubrox` in the old project~~ **N/A — that project is inaccessible.** The v4 analogue is pruning the same-shape binding in the NEW project after the repo rename (step 1 above).
+~~39. Update Cloud Logging saved queries in old project~~ **N/A — old project inaccessible.** The new project starts empty by construction; no inherited filters to update.
+~~40. Close the `cubrox/cubrox` repo redirect note in CHANGELOG~~ **STILL VALID** — folded into step 6 above.
+
+**RB-5 (v4):** Past this point, rollback means re-provisioning from scratch (re-run #237's provisioning recipe) plus re-applying the Phase 1 code rename. Phase 0 snapshots are unobtainable; the only "snapshot" we have is `scripts/provision-gcp-project.sh` itself plus this plan document. Don't run v4 Phase 5 step 1 (WIF prune) until the new service has been stable for at least 30 days.
 
 ---
 
@@ -465,16 +549,18 @@ The v1 ordering had a race window where `vars.CLOUD_RUN_SERVICE=masterkey` could
 - Phase 5 step 36: archive image manifests before deleting AR repo.
 - Cloud Logging retains logs by project + resource label for 30 days minimum (configurable); old service logs are still query-able as long as the project lives.
 
-### R3 — WIF auth fails after repo rename (REVISED per B2)
+### R3 — WIF auth fails after repo rename (v4: SUBSTANTIALLY MITIGATED by clean provisioning, residual risk addressed by Phase 2 step 16 dual-write in the new project)
 
-**Likelihood:** Certain if Phase 2 step 16 (dual-write) is skipped.
-**Impact:** Every workflow that authenticates to GCP starts failing with `iam.serviceAccounts.getAccessToken denied`. `deploy.yml`, `preview-deploy.yml`, `synthetic-monitor.yml`, `rollback-production.yml`, `preview-cleanup.yml` are all affected. Production isn't down (last good revision still serves) but no new deploys can ship — including rollback. **This is the single most likely "stuck in the middle" failure mode.**
+**v4 STATUS:** Substantially resolved. #237 provisions WIF cleanly in the new project from day 1 (bound to `cubrox/cubrox`, the repo name at provisioning time). The residual risk is that the binding doesn't auto-update when the repo is renamed to `cubrox/masterkey` — same mechanism as v3, but now executed against a project we know is correctly wired (since #237 just provisioned it). Phase 2 step 16's dual-write (now performed against the new project) addresses the residual risk identically to v3.
+
+**Likelihood (v4):** Low — the dual-write step is well-understood and the new project's WIF binding has a known-good baseline. Higher only if Phase 2 step 16 is skipped.
+**Impact:** Every workflow that authenticates to GCP starts failing with `iam.serviceAccounts.getAccessToken denied`. `deploy.yml`, `preview-deploy.yml`, `synthetic-monitor.yml`, `rollback-production.yml`, `preview-cleanup.yml` are all affected. Production isn't down (last good revision still serves) but no new deploys can ship — including rollback. **This was the single most likely "stuck in the middle" failure mode in v3; in v4 it's downgraded because the dual-write is now a one-time operation against a fresh project rather than a "modify the existing prod environment" operation.**
 
 **Mechanism:** Per `provision-gcp-project.sh:437-439, 465-474`, the WIF provider's attribute-condition is trivially true (`assertion.repository != ''`). The repo pin lives on the **deployer SA's IAM policy** as `principalSet://.../attribute.repository/cubrox/cubrox`, with BOTH `roles/iam.workloadIdentityUser` AND `roles/iam.serviceAccountTokenCreator`. After the repo rename, GitHub's OIDC token presents `repository = cubrox/masterkey`, which doesn't match the bound principalSet, so token-exchange fails. **There is nothing to change at the provider level** — the v1 plan's "edit the attribute condition" path was wrong.
 
 **Mitigation:**
 - Phase 2 step 16 dual-writes the new binding BEFORE the rename. The old binding stays alongside until Phase 5 step 38 removes it. Both names resolve for the entire grace window.
-- Verification: `workflow_dispatch` on `rollback-production.yml` with `revision=<current>` and `reason='WIF binding verification'` after step 16 but before step 17 (the repo rename).
+- Verification (v4.1 — BC3 fix): `workflow_dispatch` on `synthetic-monitor.yml` after step 16 but before step 17 (the repo rename). The workflow auths via WIF and probes the service URL — no traffic-shift side effect. Previously this called for `rollback-production.yml workflow_dispatch`, but that workflow mutates traffic via `gcloud run services update-traffic` and lacks a dry-run mode; DevOps flagged it as unsafe. `workflow_dispatch` on `synthetic-monitor.yml` works even though Phase 1 step 13 commented out its `schedule:` block — the two triggers are independent.
 - The per-repo binding kept narrow (not widened to org-level per resolved Q5) — accidental sibling repos created under `cubrox` never inherit deploy capability.
 
 ### R4 — Supabase magic-link sign-in breaks (redirect URL not in allowlist)
@@ -617,6 +703,83 @@ None of our internal code imports the package by its `pyproject.toml` name (the 
 - Step (-1).1 captures the pre-Phase-(-1) SHA AND a copy of v1.3.0 `template-sync.sh` to `/tmp/template-sync.v1.3.0.sh` as the bootstrap-of-bootstrapper rollback path.
 - `curl -fsSL` is used (lowercase `f` exits non-zero on HTTP error; `S` shows errors; `L` follows redirects) — explicit choice to fail loud on 404.
 
+### R19 — GCP billing on new project (NEW per v4)
+
+**Likelihood:** Medium. The operator's billing org may have quotas / budgets / limits that differ from the lost project's posture.
+**Impact:** First deploy fails with quota exhaustion or billing-not-enabled error; or, more insidiously, succeeds but consumes more budget than expected once preview deploys multiply (each preview is a separate Cloud Run revision drawing min-instance and request-billed CPU/memory).
+
+**Mitigation:**
+- #237's Definition of Done includes a billing-account verification step (confirm billing is enabled and a budget alert is set at ≥ $50/month threshold).
+- Audit default Cloud Run quotas via `gcloud compute project-info describe --project=$NEW_GCP_PROJECT_ID` post-provisioning; raise if needed before first deploy.
+- Verify Artifact Registry storage quota; default is multi-TB so unlikely to bind.
+- Enable Cloud Logging exclusion filters for noisy preview-deploy logs if cost ramp surprises (likely a no-op given low traffic).
+
+### R20 — External links pointing at legacy production URL (NEW per v4)
+
+**Likelihood:** Medium. The legacy URL `agile-flow-app-heo5ry7rua-uc.a.run.app` is referenced in `docs/LAUNCH-CHECKLIST.md` (line 10 and others), `CLAUDE.md`, possibly session journals, possibly older PR descriptions, possibly external surfaces (team Slack, blog posts, README badges). The legacy runtime continues to serve for an unknown period from the inaccessible project; eventually Google reclaims it for non-payment, after which the URL 404s.
+**Impact:** Two layered failure modes:
+1. **Short term (legacy runtime still up, possibly serving stale code):** users / scripts / docs that link to the old URL get a response — but it's from the orphaned runtime, NOT the new `masterkey` deployment. They see stale UI, stale data semantics, stale auth allowlist behavior. Confusing but recoverable.
+2. **Long term (legacy URL reclaimed):** anything still linking to it 404s. Less surprising than (1) but more disruptive if it happens during an active user session.
+
+**Mitigation:**
+- v4 Phase 5 step 5 enumerates external references via `rg 'agile-flow-app-heo5ry7rua' .` across the repo, plus a manual audit of team comms surfaces.
+- Update `docs/LAUNCH-CHECKLIST.md`, `CLAUDE.md`, and any other repo-controlled doc to point at the new `masterkey-*.run.app` URL (this is partially handled by E4-T3 / #206 already).
+- For external surfaces (blog, Slack history): add a sticky-pin note explaining the URL change. Cannot redirect at the DNS layer since we don't own a custom domain.
+- The session-journal historical record is intentionally NOT updated — it's a log, not a maintained reference (consistent with §6 policy).
+- Accept that the legacy URL will eventually 404 silently; this is the cost of losing project ownership and was already absorbed in the operator's pivot decision.
+
+### R21 — `provision-gcp-project.sh` defaults `ARTIFACT_REPO=agile-flow` if env var unset (NEW per v4.1 / DevOps)
+
+**Likelihood:** Certain if #237's happy-path step 4 omits `ARTIFACT_REPO=masterkey` (the current ticket body does omit it).
+**Impact:** Script creates an Artifact Registry repo named `agile-flow` in the new project. Subsequent CI deploys (with `vars.ARTIFACT_REPO=masterkey`) try to push to a `masterkey` AR repo that doesn't exist; deploy fails with `repository not found`. Operator now has a dead `agile-flow` AR repo in the new project + must create a `masterkey` repo separately. Re-running the script with the corrected env vars is idempotent (per `provision-gcp-project.sh:308`) but leaves the `agile-flow` repo as dead weight.
+
+**Mitigation:**
+- #237's body MUST explicitly set `ARTIFACT_REPO=masterkey` in step 4 (per the v4.1 §6 callout — BC2 correction). Same for `CLOUD_RUN_SERVICE=masterkey`.
+- #237's DoD MUST include `gcloud artifacts repositories describe masterkey --location=us-central1 --project=$NEW_GCP_PROJECT_ID` returning success (per the v4.1 §6 DoD check 2).
+- Overlap with B4-listed #196 (rename script defaults from `agile-flow*` to `masterkey*`) — but #196 lands in the Phase 1 PR AFTER #237 runs, so the rename doesn't help #237. Operator must override the defaults at invocation time.
+
+### R22 — Placeholder Cloud Run service ships with no env vars; R13 still applies on first real deploy (NEW per v4.1 / DevOps)
+
+**Likelihood:** Low for the steady state; medium if anyone manually `gcloud run deploy`s between #237 finishing and the first `deploy.yml` run.
+**Impact:** `provision-gcp-project.sh:800-825` creates the placeholder Cloud Run service with `--image=us-docker.pkg.dev/cloudrun/container/hello`, `--allow-unauthenticated`, `--port=8080`, and **no `--set-env-vars`**. First `deploy.yml` run uses `--update-env-vars` semantics (set/replace per the deploy.yml comment lines 192-196), so it creates all env vars as literals — matches the deploy.yml intent and works cleanly. **The R13 risk re-applies** only if anyone manually `gcloud run deploy`s with `--set-secrets DATABASE_URL=...` between #237 finishing and the first `deploy.yml` run; that would brick the service per Cloud Run's env-var-type stickiness, requiring destructive recreate.
+
+**Mitigation:**
+- Phase 3 verification checklist step 3 (already in plan) explicitly verifies env-var types match `deploy.yml`'s shape (literals for `DATABASE_URL` / `ANTHROPIC_API_KEY`, `valueFrom: secretKeyRef:` for Supabase keys).
+- #237's DoD check 4 (v4.1) explicitly runs `gcloud run services describe masterkey --format=yaml | grep -E 'name: (DATABASE_URL|ANTHROPIC_API_KEY)' -A 2` and requires empty output (or literal-only) — catches any manual `--set-secrets` interference before the first preview-deploy lands.
+- Operational convention: do NOT manually `gcloud run deploy` against `masterkey` between #237 finish and Phase 1 PR merge; let `deploy.yml` be the first thing to populate env vars.
+
+### R23 — API-enable list mismatch between #237 body and `provision-gcp-project.sh` (NEW per v4.1 / DevOps)
+
+**Likelihood:** Certain (the two lists disagree today).
+**Impact:** Low. #237's step 3 enables `run`, `artifactregistry`, `iamcredentials`, `cloudbuild`, `secretmanager` (5 APIs). `provision-gcp-project.sh:297-304` enables `run`, `artifactregistry`, `secretmanager`, `iam`, `iamcredentials`, `billingbudgets` (6 APIs). Differences: #237 includes `cloudbuild` (NOT used by `deploy.yml`, which does a local `docker build`); #237 OMITS `iam` (usually enabled by default on new projects, but if not, the script's own IAM-policy-binding calls fail) and `billingbudgets` (needed for R19's budget alert).
+
+If the operator runs #237 step 3 verbatim and skips step 4 (or runs them in either order), the resulting project may be missing `billingbudgets` (R19 mitigation breaks) and have `cloudbuild` enabled gratuitously (no impact, just a wasted enabled API). The script's step 5 (line 297-304) re-enables APIs idempotently, so running the script masks the issue — but only if step 4 runs at all.
+
+**Mitigation:**
+- #237's body (per v4.1 §6 callout) reconciles step 3's API list with the script's (use the script's 6-API list; drop `cloudbuild`).
+- Defense-in-depth: the script's idempotent re-enable in step 5 means even if #237 step 3 is wrong, running step 4 fixes it.
+
+### R24 — Supabase webhook URLs unaffected by GCP project change (NEW per v4.1 / DevOps — informational, no action)
+
+**Likelihood:** N/A (clarification, not a risk).
+**Impact:** N/A — read-only verification confirms no impact.
+
+**Note:** The Supabase GitHub App's per-PR branching webhooks point at supabase.com endpoints, NOT at our Cloud Run service. Switching GCP projects has no effect on those URLs. The Supabase Auth dashboard's redirect-URL allowlist IS scoped to OUR Cloud Run URLs (R4 / R12 still apply) but is keyed against the Supabase project (`gnswmcgaztcxslirulwm`), unaffected by GCP project changes. Logged here for completeness so a future reviewer doesn't re-investigate.
+
+### R25 — Old GCP project may still be accruing charges despite IAM access loss (NEW per v4.1 / DevOps)
+
+**Likelihood:** High. "Operator lost access" likely means lost IAM access to the project, not loss of the billing relationship — billing keeps running until the billing-org owner intervenes.
+**Impact:** Orphaned legacy runtime continues to accrue:
+- Cloud Run charges (`deploy.yml:168` hardcodes `--min-instances=1`, so the service draws min-instance billing 24/7).
+- Cloud Logging ingestion charges (logs retention is per-project; even orphaned services emit logs).
+- Artifact Registry storage charges for the historical image manifests.
+The cost is bounded (small Cloud Run service, low traffic) but not zero — likely tens of dollars per month, indefinitely, until the billing org owner shuts it down or Google reclaims the project for non-payment of an unrelated invoice.
+
+**Mitigation:**
+- Operator should file a billing-org case to either (a) regain access enough to set `--min-instances=0` and stop logging ingestion, or (b) initiate project shutdown via the billing console (Project Settings → Shut down). Project shutdown is available to anyone with `roles/billing.admin` on the billing account regardless of project-level IAM, so this is achievable even without project-level access.
+- If (a) and (b) are both unavailable: accept the cost until Google reclaims the project for non-payment of some other invoice. The legacy URL `agile-flow-app-heo5ry7rua-uc.a.run.app` continues to serve from the orphaned runtime until that happens (R20 short-term failure mode).
+- Recommend operator at minimum escalate to the billing org owner before accepting indefinite charges. This is a one-email task, not a multi-step recovery.
+
 ---
 
 ## 5. Resolved decisions (was "open questions" in v1)
@@ -638,10 +801,193 @@ All ten v1 open questions have been resolved by DevOps. Folded into the plan as 
 
 ---
 
-## 6. Out of scope
+## 6. Backlog reconciliation post-pivot (v4 NEW)
+
+Explicit per-ticket actions in light of the GCP pivot. Three action verbs:
+
+- **KEEP** — ticket is unchanged in scope and acceptance criteria; just proceed.
+- **REWORK** — ticket's intent is still valid but the description / steps / DoD need editing for the new context. A "what changes" note is provided.
+- **CLOSE** — ticket is obsolete (the work no longer exists, or was never doable in the post-pivot reality). Close as not-planned with a comment pointing at this plan §6 row.
+
+This table is the to-do list for whoever does the post-pivot grooming pass. **No tickets are closed automatically by this plan revision; the operator (or PO) executes the reconciliation table.**
+
+| # | Title (abbreviated) | Action | Reason / what changes |
+|---|---------------------|--------|------------------------|
+| #181 | Epic 1 — Phase 0 (epic) | REWORK | Narrow scope: GCP snapshot work N/A; epic is now GitHub-side inventory only (board items #187, open-PR check, forks). Update epic body to describe v4 narrowed scope. |
+| #182 | Epic 2 — Phase 1 (epic) | KEEP | Codebase rename PR is GCP-independent. Sub-tickets #192-#199 unchanged. |
+| #183 | Epic 3 — Phase 2 (epic) | KEEP | Repo rename + board migration + WIF re-bind (in new project). Sub-ticket #200's intent shifts (see below) but epic shape is the same. |
+| #184 | Epic 4 — Phase 3 (epic) | REWORK | Narrow scope: most pre-create infra work is absorbed by #237. Epic becomes "verification + Supabase allowlist + optional dry-run". |
+| #185 | Epic 5 — Phase 4 (epic) | REWORK | Collapse to 3 steps: merge PR, verify masterkey health, restore synthetic monitor. The var-flip dance (#212, #213) and old-service health check (#211) disappear. |
+| #186 | Epic 6 — Phase 5 (epic) | REWORK | Half the work is N/A (old project inaccessible). Epic now: WIF prune in new project, Memory MCP audit, ADR-007, doc cleanup including new R20. |
+| #187 | Inventory `vibeacademy/projects/29` | KEEP | Still valid; feeds #203 (board migration). |
+| #188 | Snapshot Cloud Run + SA IAM + secrets | CLOSE | Obsolete — old project inaccessible; cannot snapshot. |
+| #189 | Verify WIF binding shape | ALREADY CLOSED 2026-06-30 | Same reason; closed not-planned. |
+| #190 | Enumerate Cloud Logging | CLOSE | Obsolete — old project inaccessible. New project starts empty. |
+| #191 | Bundle Phase 0 snapshots into PR | CLOSE | Obsolete — nothing to bundle without #188/#190. |
+| #192 | Rename `CUBROX_TEST_SEED_ENABLED` env var | KEEP | Codebase change; GCP-independent. |
+| #193 | Rename `window.cubroxLineCount` | KEEP | Same. |
+| #194 | Rename app metadata strings | KEEP | Same. |
+| #195 | Rename `tests/a11y` package | KEEP | Same. |
+| #196 | Rename `provision-gcp-project.sh` + `diagnose-cloudrun.sh` defaults | KEEP | Same. Note: `provision-gcp-project.sh` was recently used by #237, so post-rename it documents the new project's recreation steps. |
+| #197 | Update `supabase/config.toml` + `CLAUDE.md` | REWORK | Add line for new GCP project ID. Add line for new production URL (gets a placeholder until #206 captures it). |
+| #198 | `.gembaflow-overrides` agent persona renames | KEEP | Same. |
+| #199 | Disable synthetic monitor schedule for cutover | KEEP | Same. The cutover window risk shape is identical. |
+| #200 | E3-T1 WIF dual-write | REWORK (v4.1 — explicitly NOT superseded by #237; BC1 / NS4) | **NOT superseded by #237.** #237 provisions ONE binding (`cubrox/cubrox`, matching the repo name at provisioning time); #200 adds the SECOND binding (`cubrox/masterkey`) on the same NEW project's deployer SA BEFORE `gh repo rename` fires (#201). Both bindings live in parallel through the rename and are pruned to one (`cubrox/masterkey` only) in Phase 5 via #220. Operator confirmed the dual-write approach 2026-06-30. **What changes vs. v3:** member URI uses `$NEW_GCP_PROJECT_ID`'s project number (not the legacy project's). DoD: verify both bindings exist on the new SA before #201 fires, via `gcloud iam service-accounts get-iam-policy $SA_EMAIL --project=$NEW_GCP_PROJECT_ID --format=json` showing two `principalSet://` entries (one per WIF role × principalSet). Verification dispatch is `synthetic-monitor.yml workflow_dispatch` against the new service (v4.1 BC3 — NOT `rollback-production.yml`, which mutates traffic). |
+| #201 | E3-T2 `gh repo rename cubrox/cubrox → cubrox/masterkey` | KEEP | Independent of GCP project identity. Pre-flight checklist still valid (drops the "vars unflipped" check since there's no flip). |
+| #202 | E3-T3 Create new project board | ALREADY DONE | Board #2 created on cubrox user account 2026-06-30. Close as done with link to board. |
+| #203 | E3-T4 Migrate 67 items from old board | KEEP | Independent of GCP. |
+| #204 | E4-T1 Create masterkey AR repo + grant SA reader | CLOSE | Obsolete — folded into #237's provisioning. Add a verification comment to #237 confirming AR repo + IAM binding exist. |
+| #205 | E4-T2 Pre-create Cloud Run masterkey service (R13 env-var types) | REWORK | Reframe as a verification-only ticket: confirm the `masterkey` service exists post-#237 with correct env-var types (`DATABASE_URL` + `ANTHROPIC_API_KEY` as literals, Supabase keys as `valueFrom: secretKeyRef:`). If #237 set them wrong, recreate the service before any preview deploy lands. |
+| #206 | E4-T3 Capture new service URL + pin to docs | KEEP | Still valid — runs against the post-#237 service. The "new URL" is just the masterkey service URL once #237 finishes. |
+| #207 | E4-T4 Add new Supabase Auth allowlist entries | KEEP | Still valid. v4 note: keep old `agile-flow-app-*` entries indefinitely (harmless; legacy URL is orphaned). |
+| #208 | E4-T5 Dry-run preview-deploy against masterkey | REWORK | Downgrade priority P0 → P1 (or P2). The race window it was meant to verify does not exist in v4. Useful as a smoke test but optional; Phase 1 PR's own preview serves the same role. |
+| #209 | E4-T6 Verify Supabase GitHub App allowlist post-rename | KEEP | Still valid; the rename still triggers the App allowlist re-verification. |
+| #210 | E5-T1 Merge Phase 1 PR with vars STILL `agile-flow-app` | REWORK | Drop the "with old vars" framing. Reframe as: "Merge Phase 1 PR; `deploy.yml` deploys to `masterkey` directly (vars are already set by #237)." Remove guardrails that check var values are still `agile-flow-app`. |
+| #211 | E5-T2 Verify agile-flow-app health post-merge | CLOSE | Obsolete — old service inaccessible and would not receive the new deploy anyway (vars point at masterkey from day 1 in v4). |
+| #212 | E5-T3 Flip GitHub vars to masterkey | CLOSE | Obsolete — done by #237. Optionally: rework to a one-line "verify `gh variable list` shows masterkey already set" check, but that's a 30-second task that doesn't need its own ticket. Close as superseded. |
+| #213 | E5-T4 Push trivial CHANGELOG commit to trigger deploy | REWORK | Demote to optional. v4 reframing: Phase 1 PR merge already triggers `deploy.yml`. A separate trivial-commit ticket is needed ONLY if Phase 1 PR is delayed and we want to verify deploy plumbing before then. Otherwise close as duplicate of #210. |
+| #214 | E5-T5 Verify masterkey service health after first real deploy | KEEP | Still valid — only verification step in v4 Phase 4. Becomes more important since there's no second-chance "old service serving prod" fallback. |
+| #215 | E5-T6 Re-enable synthetic monitor | KEEP | Pairs with #199. |
+| #216 | E5-T7 Announce new URL + update external references | KEEP | Still valid; folds in R20 enumeration work. |
+| #217 | E6-T1 Delete old Cloud Run service | CLOSE | N/A — old project inaccessible. |
+| #218 | E6-T2 Archive image manifests + delete old AR repo | CLOSE | N/A — same reason. |
+| #219 | E6-T3 Remove old Supabase Auth allowlist entries | REWORK | Demote to optional (P2 → P3). The old entries are harmless once the legacy runtime is orphaned. Architect's recommendation: leave them for 6+ months. |
+| #220 | E6-T4 Remove old WIF binding for cubrox/cubrox | REWORK | What changes: now refers to the binding in the NEW project (added by #237 at provisioning time, before repo rename). After Phase 2 step 16 dual-writes the `cubrox/masterkey` binding, this ticket prunes the `cubrox/cubrox` binding in the SAME new project. |
+| #221 | E6-T5 Update Cloud Logging saved queries | REWORK | Most likely closes as no-op (new project starts empty by construction; no inherited filters). Confirm and close. |
+| #222 | E6-T6 Memory MCP audit | KEEP | Still valid. |
+| #223 | E6-T7 Write ADR-007 + resolve PLATFORM-GUIDE drift | REWORK | Add to ADR-007 scope: document the GCP pivot (project-lost-then-re-provisioned) as a load-bearing fact of the rename history. |
+| #224-#231 | Phase -1 epic + sub-tickets | ALREADY CLOSED | Closed via PR #232 and follow-ups. |
+| #233 | json-validate ruleset split | ALREADY CLOSED | Closed via PR #236. |
+| #234 | bot.reviewer alignment | ALREADY CLOSED | Closed via PR #235. |
+| #237 | Provision new GCP project as masterkey from day 1 | REWORK BODY (v4.1 — BC1 + BC2) — KEEP scope, IN FLIGHT | The umbrella ticket that triggers this v4 revision. Must complete before #200 + #201 fire. **Body needs three edits — see `#237 body MUST include` callout below this table.** Scope of WORK is unchanged; only the ticket's body text changes. |
+
+#### `#237 body MUST include` callout (v4.1 — BC1 + BC2)
+
+The orchestrator must edit issue #237's body to reflect three corrections that the current body gets wrong. Plan content here is the authoritative spec for what the body should say. This plan does NOT edit the issue itself — that's the orchestrator's job.
+
+**Correction 1 — WIF dual-write IS required (BC1).** #237's current body says, in its "Blocks / supersedes" section, that #200 is "superseded; this ticket creates the binding fresh, no dual-write needed." That statement is WRONG and must be replaced. The correct statement:
+
+> **#200 remains REQUIRED — not superseded.** This ticket (#237) provisions ONE WIF binding on the new project's deployer SA for `principalSet://.../attribute.repository/cubrox/cubrox` (matching the repo name at provisioning time, since the rename has not yet happened). Before `gh repo rename cubrox/cubrox → cubrox/masterkey` fires (#201, Phase 2 step 17), #200 must add a SECOND parallel binding for `principalSet://.../attribute.repository/cubrox/masterkey` to the same SA, on the same new project. Without #200, every workflow that authenticates to GCP after the rename will fail with `iam.serviceAccounts.getAccessToken denied` — same R3 failure mode v3 was engineered to prevent. The dual-write is pruned to a single binding (`cubrox/masterkey`) in Phase 5 via #220. Operator confirmed this approach 2026-06-30.
+
+Any nearby text in #237 implying that "Epics 3-5 collapse" applies to Phase 2's WIF re-bind step is ALSO wrong and must be reworded — Phases 3 / 4 / 5 do collapse substantially per v4, but the Phase 2 WIF re-bind (step 16) is NOT collapsed; the dual-write executes as written above.
+
+**Correction 2 — `provision-gcp-project.sh` env-var contract (BC2).** #237's current happy-path step 4 invokes the provision script with `GCP_PROJECT_ID=<NEW> GITHUB_REPO=cubrox/cubrox bash scripts/provision-gcp-project.sh`. This is WRONG and causes silent skip of the entire WIF setup block. Verified by reading `scripts/provision-gcp-project.sh` lines 402-478:
+
+- Line 404: `WIF_OWNER="${GITHUB_OWNER:-${GITHUB_USERNAME:-}}"` — sources from `GITHUB_OWNER` or `GITHUB_USERNAME`, NOT from `GITHUB_REPO`.
+- Line 405: `WIF_REPO_NAME="${GITHUB_REPO:-agile-flow-gcp}"` — `GITHUB_REPO` is the BARE REPO NAME within the owner, not `owner/name`.
+- Line 407: `if [[ -n "$WIF_OWNER" ]]; then` — guards the entire WIF block (pool create, provider create, SA bindings).
+- Line 478: `[skip] WIF setup not requested (GITHUB_OWNER and GITHUB_USERNAME unset)` — silent skip path.
+- Line 60: `ARTIFACT_REPO` defaults to `agile-flow` if unset (R21).
+- Line 800: `SERVICE_NAME` defaults to `agile-flow-app` if `CLOUD_RUN_SERVICE` is unset.
+- Line 465: `WIF_MEMBER="principalSet://.../attribute.repository/${WIF_OWNER}/${WIF_REPO_NAME}"` — note the slash is inserted by the script, so passing `GITHUB_REPO=cubrox/cubrox` (with the slash already in it) would produce a malformed 3-segment URI even if `WIF_OWNER` were correctly set.
+- Line 862: GitHub-secrets push is gated on `GITHUB_REPOSITORY` being set; without it, secrets are printed rather than pushed.
+
+The correct invocation #237's step 4 must read:
+
+```bash
+GCP_PROJECT_ID=<new-project-id> \
+ARTIFACT_REPO=masterkey \
+CLOUD_RUN_SERVICE=masterkey \
+GITHUB_OWNER=cubrox \
+GITHUB_REPO=cubrox \
+GITHUB_REPOSITORY=cubrox/cubrox \
+bash scripts/provision-gcp-project.sh
+```
+
+Note: `GITHUB_REPO=cubrox` (bare repo name) because the GitHub slug is `cubrox/cubrox` (owner `cubrox`, repo `cubrox`); the `WIF_MEMBER` URI assembled by line 465 then correctly resolves to `.../attribute.repository/cubrox/cubrox`. `GITHUB_REPOSITORY=cubrox/cubrox` enables the Step 7 auto-push of `GCP_PROJECT_ID`, `GCP_SERVICE_ACCOUNT`, and `GCP_WORKLOAD_IDENTITY_PROVIDER` GitHub Actions secrets — without it #237's step 6 ("verify secrets") would be doing work that step 4 should have already done.
+
+**Correction 3 — Post-provisioning DoD checks (BC1 + BC2 + R19 + R22).** #237's Definition of Done must include the following one-line verification commands; each catches a v4.1-flagged failure mode before the next phase starts:
+
+1. `gcloud iam service-accounts get-iam-policy "$SA_EMAIL" --project="$NEW_GCP_PROJECT_ID" --format=json | grep -c 'principalSet'` MUST return ≥ 2 (two WIF roles × one binding for `cubrox/cubrox`). If 0, BC2 happened: WIF was silently skipped — re-run the script with the env vars above. (BC2 verification.)
+2. `gcloud artifacts repositories describe masterkey --location=us-central1 --project="$NEW_GCP_PROJECT_ID"` MUST succeed. If the script created `agile-flow` instead, R21 happened — set `ARTIFACT_REPO=masterkey` and re-run. (R21 verification.)
+3. `gcloud run services describe masterkey --region=us-central1 --project="$NEW_GCP_PROJECT_ID" --format='value(status.url)'` MUST return a URL. If it returns "service not found" or describes `agile-flow-app` instead, the `CLOUD_RUN_SERVICE` default fired — set the env var and re-run. (BC2 + R21 sibling check.)
+4. `gcloud run services describe masterkey --region=us-central1 --project="$NEW_GCP_PROJECT_ID" --format=yaml | grep -E 'name: (DATABASE_URL|ANTHROPIC_API_KEY)' -A 2` — the placeholder service has NO env vars per `provision-gcp-project.sh:800-825` (uses the hello image). First `deploy.yml` run populates them via `--update-env-vars` semantics. **R22 risk:** if anyone manually `gcloud run deploy`s with `--set-secrets DATABASE_URL=...` between #237 finishing and the first `deploy.yml` run, R13 (env-var type stickiness) bricks the service. DoD: confirm output is empty (or only contains literals matching `deploy.yml`'s shape) before the first preview-deploy lands. (R22 verification.)
+5. `gcloud billing projects describe "$NEW_GCP_PROJECT_ID" --format='value(billingEnabled)'` MUST return `True` AND `gcloud billing budgets list --billing-account=$BILLING_ACCOUNT --format='value(displayName)' | grep -c "$NEW_GCP_PROJECT_ID"` MUST return ≥ 1 (budget alert exists). If 0, R19 happened — operator must set up the budget alert manually via the billing console. (R19 verification, per NS1.)
+6. `gh variable list --repo cubrox/cubrox | grep -E 'CLOUD_RUN_SERVICE|ARTIFACT_REPO'` MUST show both as `masterkey`. If absent, the Step 7 auto-push was skipped because `GITHUB_REPOSITORY` was unset — set it and re-run, or push the vars manually with `gh variable set`. (BC2 sibling check.)
+
+Additionally: the API-enable list in #237's step 3 (`run`, `artifactregistry`, `iamcredentials`, `cloudbuild`, `secretmanager`) does NOT match `provision-gcp-project.sh:297-304` (`run`, `artifactregistry`, `secretmanager`, `iam`, `iamcredentials`, `billingbudgets`). The script's list is more accurate for our shape — `deploy.yml` does NOT use Cloud Build (it runs a local `docker build` then pushes), and `billingbudgets` is needed for R19's mitigation. Reconcile #237's step 3 to use the script's six-API list (`run`, `artifactregistry`, `secretmanager`, `iam`, `iamcredentials`, `billingbudgets`) and drop `cloudbuild`. (R23 reconciliation.)
+
+**Reconciliation summary (47 table rows covering 53 in-scope tickets — one row aggregates the 8 Phase -1 sub-tickets #224-#231; v4.1 updates #237's classification from KEEP to REWORK-BODY):**
+- **CLOSE** (obsolete): 8 tickets — #188, #190, #191, #204, #211, #212, #217, #218.
+- **REWORK** (intent valid; scope/steps change — includes 4 epic-body refreshes and v4.1's #237 body edit): 15 tickets — #181, #184, #185, #186, #197, #200, #205, #208, #210, #213, #219, #220, #221, #223, #237 (v4.1 — body edit only; scope unchanged).
+- **KEEP** (unchanged scope and acceptance criteria): 19 tickets — #182, #183, #187, #192, #193, #194, #195, #196, #198, #199, #201, #203, #206, #207, #209, #214, #215, #216, #222.
+- **ALREADY CLOSED / DONE pre-v4** (action: none): 11 tickets — #189 (closed 2026-06-30), #202 (board #2 created 2026-06-30), #224-#231 (Phase -1, PR #232), #233 (PR #236), #234 (PR #235).
+
+Net: of 53 in-scope tickets (#181-#223 + #233, #234, #237), v4.1 closes 8 as obsolete, reworks 15 (one of which is #237's body-only edit), keeps 19 unchanged, and inherits 11 already done. Critical chain shrinks from v3's 12 tickets to v4's 8 (unchanged in v4.1).
+
+---
+
+## 6.1 Updated dependency graph (v4)
+
+The v3 critical chain (`E1-T3 → E3-T1 → E3-T2 → E4-T2 → E4-T3 → E4-T4 → E4-T5 → E5-T1 → E5-T2 → E5-T3 → E5-T4 → E5-T5`) collapses substantially. v4 chain:
+
+```
+#237 (provision new GCP project as masterkey)
+   │
+   │   • new project ID, deployer SA, WIF binding (cubrox/cubrox)
+   │   • GitHub repo secrets rotated: GCP_PROJECT_ID, GCP_SERVICE_ACCOUNT,
+   │     GCP_WORKLOAD_IDENTITY_PROVIDER
+   │   • GitHub repo vars set: CLOUD_RUN_SERVICE=masterkey, ARTIFACT_REPO=masterkey
+   │   • first deploy creates `masterkey` Cloud Run service
+   ▼
+#187 (inventory legacy board)   ──┐
+#199 (disable synthetic monitor) ──┤  Parallel-OK with Phase 1
+ALL #192-#198 (Phase 1 code) ─────┤  ← single PR (Phase 1 PR)
+                                  ▼
+                            #200 (WIF dual-write for cubrox/masterkey
+                                  in NEW project — Phase 2 step 16)
+                                  │
+                                  ▼
+                            #201 (gh repo rename cubrox/cubrox → cubrox/masterkey)
+                                  │
+                                  ├──► #202 already done (board #2 created)
+                                  ├──► #203 (migrate 67 items)
+                                  ├──► #209 (Supabase GitHub App allowlist verify)
+                                  ▼
+                            #205 (verify masterkey service env-var types)
+                                  │
+                                  ▼
+                            #206 (capture URL → docs)
+                                  │
+                                  ▼
+                            #207 (Supabase Auth allowlist + new URLs)
+                                  │
+                                  ▼
+                            (optional) #208 (dry-run preview-deploy)
+                                  │
+                                  ▼
+                            #210 (merge Phase 1 PR → deploys to masterkey)
+                                  │
+                                  ▼
+                            #214 (verify masterkey health)
+                                  │
+                                  ▼
+                            #215 (re-enable synthetic monitor)
+                                  │
+                                  ▼
+                            #216 (announce new URL, R20 enumeration)
+                                  │                30-day timer
+                                  ╰─────────────────────────► Phase 5
+                                                #220 (prune cubrox/cubrox WIF
+                                                       binding in new project)
+                                                #221 (Cloud Logging — likely no-op)
+                                                #222 (Memory MCP audit)
+                                                #223 (ADR-007)
+                                                (#219 demoted to optional)
+```
+
+**v4 critical chain (8 tickets, was 12):** `#237 → ALL #192-#198 (Phase 1) → #200 → #201 → #205 → #207 → #210 → #214`.
+
+**What blocks the most downstream work in v4:** still #201 (repo rename). It unblocks: #203, #209, #205, #206, #207, #208, #210, #214, #215, #216, #220. Eleven downstream tickets — down from v3's 23, because Phases 3/4/5 are dramatically simpler.
+
+---
+
+## 7. Out of scope
 
 Explicitly NOT part of this refactor:
 
+- **Old GCP project recovery.** Per v4 operator decision 2026-06-30. The legacy project is abandoned; we don't attempt to regain access. (Was implicit in v3; explicit in v4.)
+- **Custom domain to mask the legacy URL.** v4 R20 documents the orphaned legacy URL as an accepted cost. A custom domain would cleanly cover it but remains deferred per resolved Q1 + Q6.
 - **GCP project ID rename.** Per locked scope. Would require recreating IAM bindings, WIF pool, secrets, the whole project — orders of magnitude more work.
 - **Supabase project ref change.** Per locked scope. Would require database migration, RLS re-deploy, JWT signing-key rotation, redirect-URL migration, magic-link template re-deploy, and a downtime window for the cutover. Out of scope.
 - **Supabase org rename.** If the Supabase org happens to be named `vibeacademy` in the dashboard, that's a separate change managed in the Supabase UI and not coupled to this refactor.
@@ -661,9 +1007,12 @@ Explicitly NOT part of this refactor:
 
 ---
 
-**Result:** Refactor plan revised (v2) for re-review.
-Scope: `cubrox` codebase + infra identifier rename to `masterkey`
-Recommendation: 5-phase staged cutover with pre-created Cloud Run service; WIF dual-write before repo rename; var-flip after PR merge to eliminate race
-Required changes since v1: 7 blockers (B1-B7) all incorporated; R10/R12/R13/R14/R15 added; Q1-Q10 resolved
-Risks: 15 identified; R3 (WIF auth — now mitigated by Phase 2 step 16 dual-write) and R1 (preview-deploy break — mitigated by Phase 3 step 25 dry-run) remain highest-leverage
-Out of scope: GCP project, Supabase project ref, public brand, framework artifacts not in `.agile-flow-overrides`, `pyproject.toml`, custom domain, CLB
+**Result:** Refactor plan revised (v4.1) — DevOps revision pass on v4 (2026-06-30) addressing BC1/BC2/BC3 from `reports/refactor/02c-devops-signoff-v4.md`.
+Scope (unchanged from v4): `cubrox` codebase + infra identifier rename to `masterkey`, executed against a NEW GCP project provisioned by #237 (legacy project inaccessible).
+Recommendation (v4.1): orchestrator edits #237 body per the §6 "**#237 body MUST include**" callout (BC1 + BC2 fixes); then #237 fires; then Phase 1 codebase PR → #200 WIF dual-write (NOT skipped — `cubrox/masterkey` binding lands on new project's SA BEFORE rename) → repo rename → board migration → cutover (single Phase 1 PR merge) → Phase 5 cleanup. v4.1 unchanged from v4 in critical-chain ordering; the changes are in #237's body specification, Phase 2 step 16's verification mechanism, and §6 row clarity.
+Phase -1 (framework alignment to gembaflow v1.5.0): DONE 2026-06-30.
+Risks (v4.1): 22 identified (R1-R20 from v4 + R21 AR repo default + R22 placeholder env vars + R23 API list mismatch + R24 Supabase webhooks unaffected/informational + R25 legacy project billing). R3 (WIF auth) substantially mitigated by clean from-scratch provisioning + the explicit Phase 2 step 16 dual-write (now verified via `synthetic-monitor.yml workflow_dispatch` per BC3, not `rollback-production.yml`). R20 remains highest-attention residual risk; R25 surfaces an adjacent concern (legacy project still billing).
+Reconciliation (§6): 8 tickets CLOSE, 15 REWORK (v4.1 reclassifies #237 from KEEP to REWORK-BODY — scope unchanged, body needs edits), 19 KEEP, 11 already done. Net work-effort reduction vs. v3: roughly half of Phase 3-5 work eliminated.
+Out of scope: old GCP project recovery, GCP project ID rename, Supabase project ref, public brand, framework artifacts not in `.gembaflow-overrides`, `pyproject.toml`, custom domain, CLB.
+
+**v4.1 highest-risk uncertainty to flag for operator:** the v4 dual-write decision stands. The v4.1 revision pass focuses on getting #237 to actually execute the dual-write correctly — namely, fixing #237's body so it (a) doesn't say "#200 superseded" (it isn't) and (b) invokes `provision-gcp-project.sh` with the right env vars so WIF setup doesn't silently no-op. The architectural choice ("dual-write in new project, prune old in Phase 5" vs. "re-run provision script after rename") is unchanged from v4 — both work; dual-write is cheaper and is what the operator's lock confirms.
