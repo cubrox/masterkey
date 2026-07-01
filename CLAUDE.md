@@ -161,18 +161,19 @@ Every agent output MUST follow these patterns. Full spec: `docs/AGENT-OUTPUT-STA
 ### Project Information
 
 - **License**: BSL 1.1 (converts to Apache 2.0 after 3 years per release)
-- **Project Name**: Cubrox
-- **Repository**: https://github.com/vibeacademy/cubrox
-- **Project Board**: https://github.com/orgs/vibeacademy/projects/29
+- **Project Name**: Cubrox (rename to Masterkey in flight — see plan v4.1)
+- **Repository**: https://github.com/cubrox/cubrox
+- **Project Board**: https://github.com/users/cubrox/projects/2
 - **Tech Stack**: FastAPI + Jinja2 + HTMX on Python 3.12
 - **Database layer**: SQLModel + Supabase CLI migrations (`supabase/migrations/*.sql`)
-- **Platform**: Google Cloud Platform (Cloud Run)
+- **Platform**: Google Cloud Platform (Cloud Run) — GCP project `master-key-501023`
+- **Production URL**: https://masterkey-7dit3lvmhq-uc.a.run.app
 - **Database**: Supabase Postgres (Pro plan, branching enabled; project ref `gnswmcgaztcxslirulwm`)
 - **Auth**: Supabase Auth (GoTrue magic-link via `supabase-py`; JWT in HttpOnly cookie)
-- **Container Registry**: Artifact Registry
-- **Secrets**: Google Secret Manager
+- **Container Registry**: Artifact Registry (repo `masterkey` in `us-central1`)
+- **Secrets**: Google Secret Manager (project `master-key-501023`)
 - **Package manager**: uv
-- **Organization**: vibeacademy
+- **Organization**: cubrox (GitHub user account owning the repo + project board)
 - **LLM**: Anthropic Claude API (`claude-haiku-4-5` for comprehension questions, with prompt caching + Postgres result cache)
 - **PDF**: pdfplumber, in-process, ≤25 MB
 - **Observability**: Google Cloud Logging + Error Reporting
