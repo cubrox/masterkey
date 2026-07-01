@@ -431,20 +431,7 @@ The original step numbers (20-26) are OBSOLETE; they referenced operations again
 ~~20. Create new Artifact Registry repo `masterkey` in the same region~~ **OBSOLETE — folded into #237.**
 ~~21. Grant the runtime SA `roles/artifactregistry.reader`~~ **OBSOLETE — folded into #237.**
 ~~22. Build + push an image to the new repo manually as a smoke test~~ **OBSOLETE — first preview-deploy or production deploy serves this role.**
-~~23. Pre-create the Cloud Run service `masterkey` with a placeholder revision~~ **OBSOLETE — #237's first deploy creates the service; placeholder no longer needed since there's no old service serving prod to coexist with.**
-    ```
-    gcloud run deploy masterkey \
-      --image=us-central1-docker.pkg.dev/$PROJECT/masterkey/masterkey:smoke \
-      --region=us-central1 \
-      --service-account=$RUNTIME_SA \
-      --port=8080 --memory=512Mi --cpu=1 \
-      --min-instances=0 --max-instances=10 \
-      --allow-unauthenticated \
-      --set-env-vars="ENVIRONMENT=production,DATABASE_URL=$PROD_DB_URL,ANTHROPIC_API_KEY=$KEY" \
-      --set-secrets="SUPABASE_URL=supabase-url:latest,SUPABASE_ANON_KEY=supabase-anon-key:latest,SUPABASE_SERVICE_KEY=supabase-service-key:latest" \
-      --no-traffic
-    ```
-    (Per resolved Q10: `--min-instances=0` for the placeholder, not 1 — the placeholder shouldn't actually run the smoke image hot. `deploy.yml:168` will flip it to 1 on the real Phase 4 deploy.) Then `--to-latest` traffic shift, but **only on the new service in isolation** — `agile-flow-app` still serves prod.
+~~23. Pre-create the Cloud Run service `masterkey` with a placeholder revision~~ **OBSOLETE — #237's first deploy creates the service; placeholder no longer needed since there's no old service serving prod to coexist with.** (v3's `gcloud run deploy` recipe with `--min-instances=0`, split env-vars/secrets per R13, and `--no-traffic` isolation from `agile-flow-app` is no longer applicable — the new project has no `agile-flow-app` to coexist with.)
 24. **v4 NOTE:** still valid as a verification step (folded into the "v4 Phase 3 verification-only checklist" above), but no longer "after pre-creating the service" — runs against the only-and-only `masterkey` service. Curl the new service's URL — `/api/health` (200), `/api/health/db` (200), then `/` (200, sees Master Key landing). **Capture the new URL** for `docs/LAUNCH-CHECKLIST.md` (B5):
     ```bash
     NEW_URL=$(gcloud run services describe masterkey --region=us-central1 --format='value(status.url)')
@@ -861,7 +848,7 @@ This table is the to-do list for whoever does the post-pivot grooming pass. **No
 | #234 | bot.reviewer alignment | ALREADY CLOSED | Closed via PR #235. |
 | #237 | Provision new GCP project as masterkey from day 1 | REWORK BODY (v4.1 — BC1 + BC2) — KEEP scope, IN FLIGHT | The umbrella ticket that triggers this v4 revision. Must complete before #200 + #201 fire. **Body needs three edits — see `#237 body MUST include` callout below this table.** Scope of WORK is unchanged; only the ticket's body text changes. |
 
-#### `#237 body MUST include` callout (v4.1 — BC1 + BC2)
+### `#237 body MUST include` callout (v4.1 — BC1 + BC2)
 
 The orchestrator must edit issue #237's body to reflect three corrections that the current body gets wrong. Plan content here is the authoritative spec for what the body should say. This plan does NOT edit the issue itself — that's the orchestrator's job.
 
