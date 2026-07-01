@@ -43,9 +43,9 @@ Project facts referenced below:
 
 - [x] Latest `Deploy to Production` run is green (Actions → Deploy to Production). *(Verified 2026-06-22: previous run successful.)*
 - [x] Warm instance confirmed: production runs `--min-instances=1` (OPS-1 #131) — no cold-start auth timeouts. *(Verified 2026-06-23.)*
-- [x] Health probes pass:
-  - `curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" <URL>/api/health` → `200` ✓ (93ms)
-  - `curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" <URL>/api/health/db` → `200` ✓ (206ms, DB reachable)
+- [x] Health probes pass (`<URL>` = `https://masterkey-7dit3lvmhq-uc.a.run.app`):
+  - `curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" https://masterkey-7dit3lvmhq-uc.a.run.app/api/health` → `200` ✓ (93ms)
+  - `curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" https://masterkey-7dit3lvmhq-uc.a.run.app/api/health/db` → `200` ✓ (206ms, DB reachable)
 - [x] Required secrets present (GitHub repo secrets + GCP Secret Manager): GCP auth (WIF provider or SA key), `PRODUCTION_DATABASE_URL`, `ANTHROPIC_API_KEY`, and Secret Manager `supabase-url` / `supabase-anon-key` / `supabase-service-key`. *(All verified 2026-06-23.)*
 
 ### D. Auth + email (the "first users onboarded" path)
