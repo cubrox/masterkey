@@ -196,8 +196,11 @@ Fix: run /bootstrap-product or restore the file from git history
 
 ## References
 
-- Upstream design plan (context only, not a runtime dependency):
-  `/Users/teddykim/projects/vibeacademy/gembaflow-meta/docs/plans/mockup-skill-downstream-implementation.md`
+- Upstream prior-art plans (context only, not a runtime dependency):
+  - [`vibeacademy/gembaflow-meta:plans/mockup-feature-spec.md`](https://github.com/vibeacademy/gembaflow-meta/blob/main/plans/mockup-feature-spec.md) (2026-06-04, PM product-shape)
+  - [`vibeacademy/gembaflow-meta:plans/mockup-implementation-plan.md`](https://github.com/vibeacademy/gembaflow-meta/blob/main/plans/mockup-implementation-plan.md) (2026-06-04, framework-architect)
+- Downstream retrofit synthesis (this fork's adoption reasoning):
+  `reports/downstream-reports/2026-07-03-mockup-pressure-test.md`
 - Reticle's mockup precedent (empirical single-file shape reference):
   `feature-x/reticle:docs/MOCKUP.html`
 - Parent epic: #255 — `/mockup design-review skill (retrofit)`
