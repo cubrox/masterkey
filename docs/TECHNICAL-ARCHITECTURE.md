@@ -542,3 +542,65 @@ Extensions are declared in the Supabase SQL migration files
     over ~3 days of agent work. Two follow-ups remain in the backlog:
     a11y harness seed restoration (#97) and per-PR Supabase branch URL
     injection (#99)
+
+<!-- ADR-007 reserved for the cubrox → masterkey rename decision (tracked in #223). -->
+
+### ADR-008: `/mockup` as design-review skill (not bootstrap-chain gate)
+
+- Status: Accepted (2026-07-03)
+- Context: The upstream `vibeacademy/gembaflow` `/mockup` skill was
+  designed as a Phase 2 gate in the bootstrap chain — sit between
+  `/bootstrap-product` and `/bootstrap-architecture`, produce
+  `docs/MOCKUP.html` + `docs/MOCKUP.yaml`, block `/bootstrap-architecture`
+  until an operator approves. Masterkey is already bootstrapped
+  (`docs/PRODUCT-REQUIREMENTS.md`, this file, ADRs 001-006 all exist;
+  M1 shipped). Adopting the upstream shape as-is would either lock out
+  future `/bootstrap-architecture` re-runs (like `/upgrade`) or become
+  dead code. Both `framework-architect` and `platform-release-engineer`
+  agents reviewed the upstream plan for downstream adoption and returned
+  **CONDITIONAL GO** on the same reduced scope. See epic #255 and the
+  downstream pressure-test report at
+  `reports/downstream-reports/2026-07-03-mockup-pressure-test.md` for
+  the full CONDITIONAL rationale from both reviewers.
+- Decision: Adopt `/mockup` as a **retrofit design-review skill** for
+  future major UX changes, invoked ad-hoc rather than as a
+  bootstrap-chain gate. Ship reduced scope:
+  - Path A (Claude Design as primary generator) + Path B (Claude
+    Artifacts as fallback)
+  - Output namespaced under `docs/mockups/<slug>-<YYYY-MM-DD>.html`
+  - SPDX license header (`BUSL-1.1`) emitted on every generated file
+  - Preflight requires `docs/PRODUCT-REQUIREMENTS.md` +
+    `docs/TECHNICAL-ARCHITECTURE.md` (both present); the four
+    upstream-assumed PRD-family docs (positioning / JTBD / market /
+    roadmap) are soft-checked
+  - `.claude/commands/mockup.md` header comment explicitly prohibits
+    any future gate coupling on `bootstrap-architecture.md`
+- Consequences:
+  - Masterkey ships a working `/mockup` skill (`.claude/commands/mockup.md`
+    merged in PR #260, #256 closed)
+  - Session journals (`reports/session-journals/YYYY-MM-DD.md`) serve
+    as the design-review audit trail — no `docs/MOCKUP-APPROVAL.md`
+    sidecar
+  - Future `/bootstrap-architecture` invocations behave unchanged; no
+    hidden dependency on a mockup artifact
+  - `docs/mockups/` folder is a growing timeline of throwaway design
+    artifacts; delete freely — production UI lives in `app/templates/`,
+    not there
+  - Ready-to-file upstream downstream-report contributions (F1-F5,
+    H1-H5) captured in the pressure-test report so `vibeacademy/gembaflow`
+    can harden the plan for other downstream forks
+- Rejected alternatives:
+  - **`/mockup` as Phase 2 gate on `bootstrap-architecture`** — would
+    permanently block re-runs on already-bootstrapped forks; both
+    reviewers flagged as high-severity downstream-fragility (F1)
+  - **`docs/MOCKUP.yaml` sidecar** — no downstream agent in masterkey
+    reads it; violates CLAUDE.md rule #7 (one canonical location per
+    fact); PRD already carries the source-of-truth content (F2)
+  - **`--approve` / `--skip` / `--refine` subcommands** — plain
+    `/mockup <slug>` and re-run for iteration; the generation tool
+    (Claude Design / Artifacts) already provides the iteration UX
+  - **`docs/MOCKUP-APPROVAL.md` audit trail** — session journals
+    already serve this purpose; a second audit source violates rule #7
+  - **Path C starter-template hand-authoring** — no realistic consumer
+    (any framework operator is a Claude user by definition); adds
+    surface area without value (F4)
