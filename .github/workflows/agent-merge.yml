@@ -97,7 +97,13 @@ jobs:
       # Render integration is empirically unreliable. See
       # docs/agent-merge-gate.md § "Informational checks" for the
       # 3-criteria bar for adding entries.
-      IGNORED_CHECKS: '[]'
+      # Downstream drift (masterkey #267): 'Deploy PR Preview to Cloud Run'
+      # legitimately reports 'skipping' on docs-only PRs due to preview-deploy's
+      # paths-ignore filter. Empirically observed during drain-run
+      # drain-2026-07-03T1530Z on PR #266 (docs-only) — the gate rejected the
+      # merge because the skipped check counted as non-SUCCESS. Adding it here
+      # so future docs-only drain runs pass. Preserve on template-sync.
+      IGNORED_CHECKS: '["Deploy PR Preview to Cloud Run"]'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
