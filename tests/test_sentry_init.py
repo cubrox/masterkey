@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import sentry_sdk
 from fastapi.testclient import TestClient
 
 import app.main
@@ -30,10 +31,28 @@ from app.config import get_settings
 @pytest.fixture(autouse=True)
 def _restore_main_module():
     """Reload app.main after each test so the patched-import state
-    doesn't leak into the rest of the suite."""
+    doesn't leak into the rest of the suite.
+
+    The teardown reload MUST run with `sentry_sdk.init` patched AND
+    `SENTRY_DSN` blanked. Without both, it re-executes app.main's init
+    branch against the REAL environment (and `.env`, since Settings sets
+    `env_file=".env"`): a developer with a real `SENTRY_DSN` exported
+    would be left with a LIVE Sentry client active for every test module
+    that collects after this one, shipping their test failures to the
+    real Sentry project as fake production errors. That violates the
+    ticket's "no `sentry_sdk.init()` in test runs" guardrail, and it is
+    invisible in CI because CI has no DSN. Caught in review of PR #283.
+    """
     yield
     get_settings.cache_clear()
-    importlib.reload(app.main)
+    with patch.dict("os.environ", {"SENTRY_DSN": ""}, clear=False):
+        with patch("sentry_sdk.init"):
+            importlib.reload(app.main)
+    # Self-guard: if the patching above is ever removed, fail loudly here
+    # rather than silently leaking a live client into the rest of the run.
+    assert not sentry_sdk.get_client().is_active(), (
+        "teardown left a live Sentry client active — see this fixture's docstring"
+    )
 
 
 def _reload_main_with_env(env: dict[str, str]):
