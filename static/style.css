@@ -39,6 +39,51 @@
   padding-bottom: var(--reader-paragraph-spacing, 1em);
 }
 
+/* READ-P2-2 (#168): focus mode — dim every passage section except the one
+   centered in the viewport, so the reader's eye isn't competing with the rest
+   of the passage.
+
+   Gated on `.focus-ready`, which the inline script in reading.html adds only
+   once the IntersectionObserver is wired up. Without JavaScript the class is
+   never added, so no section is ever dimmed and the passage reads normally —
+   that's the graceful-degradation requirement. (Dimming via CSS alone would
+   leave a JS-less reader with the WHOLE passage at 0.4 and nothing
+   highlighted.)
+
+   The opacity value comes from --reader-section-opacity, set server-side in
+   reader_style.html: 0.4 when focus mode is on, 1 when off. Because that
+   variable lives in the swapped <style> block, toggling the preference takes
+   effect immediately with no page reload.
+
+   CONTRAST TRADE-OFF (measured, #168). Dimmed text at 0.4 does NOT meet
+   WCAG AA 4.5:1 — the ticket's guardrail asserted it did, which is incorrect:
+
+     light bg / dark text    17.40:1 full -> 2.51:1 dimmed
+     sepia bg / sepia text   11.24:1 full -> 2.22:1 dimmed
+     dark bg / light text    14.20:1 full -> 3.33:1 dimmed
+
+   Holding 4.5:1 needs roughly 0.51-0.68 alpha depending on theme. 0.4 is kept
+   deliberately: the whole point of the mode is to de-emphasise text the reader
+   is NOT on, and the mitigations are that it is opt-in (default off), instantly
+   reversible, the focused section always renders at full contrast, and opacity
+   does not affect assistive tech (nothing is hidden from a screen reader).
+   Raising the floor is a one-value change here if the accessibility audit
+   (roadmap M1) prefers conformance over focus strength. */
+#reading-surface.focus-ready .reading-section {
+  opacity: var(--reader-section-opacity, 1);
+  transition: opacity 0.2s ease;
+}
+
+#reading-surface.focus-ready .reading-section.focus-active {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #reading-surface.focus-ready .reading-section {
+    transition: none;
+  }
+}
+
 /* Inline comprehension question shown after each passage section. */
 .inline-question {
   border-left: 3px solid var(--pico-primary);
