@@ -55,20 +55,26 @@
    variable lives in the swapped <style> block, toggling the preference takes
    effect immediately with no page reload.
 
-   CONTRAST TRADE-OFF (measured, #168). Dimmed text at 0.4 does NOT meet
-   WCAG AA 4.5:1 — the ticket's guardrail asserted it did, which is incorrect:
+   WHY 0.7 AND NOT 0.4 (#168). The ticket specified 0.4 and asserted it
+   "preserves WCAG AA contrast". It does not — dimmed body text at 0.4 measures:
 
      light bg / dark text    17.40:1 full -> 2.51:1 dimmed
      sepia bg / sepia text   11.24:1 full -> 2.22:1 dimmed
      dark bg / light text    14.20:1 full -> 3.33:1 dimmed
 
-   Holding 4.5:1 needs roughly 0.51-0.68 alpha depending on theme. 0.4 is kept
-   deliberately: the whole point of the mode is to de-emphasise text the reader
-   is NOT on, and the mitigations are that it is opt-in (default off), instantly
-   reversible, the focused section always renders at full contrast, and opacity
-   does not affect assistive tech (nothing is hidden from a screen reader).
-   Raising the floor is a one-value change here if the accessibility audit
-   (roadmap M1) prefers conformance over focus strength. */
+   all far below the 4.5:1 AA threshold. axe independently confirmed this in CI
+   (2.52:1, effective foreground #a3a3a3) and failed the a11y gate as a
+   `serious` wcag143 violation, so the ticket's own "zero new axe violations"
+   requirement contradicted its 0.4 value.
+
+   0.7 is the smallest round value clearing AA on every supported theme:
+
+     light 6.41:1   sepia 4.78:1   dark 7.51:1
+
+   (sepia is the binding constraint — it needs 0.68.) The trade-off is that
+   dimming is gentler than the ticket imagined. If real readers find the cue too
+   subtle, strengthen the ACTIVE section instead of dimming the rest further —
+   anything that pushes non-active text below 4.5:1 re-breaks the gate. */
 #reading-surface.focus-ready .reading-section {
   opacity: var(--reader-section-opacity, 1);
   transition: opacity 0.2s ease;

@@ -605,7 +605,7 @@ def test_focus_mode_on_emits_dimmed_opacity(client: TestClient, session: Session
     body = client.post("/preferences/focus_mode_enabled", data={"value": "true"}).text
 
     assert '<style id="reading-surface-style">' in body
-    assert "--reader-section-opacity: 0.4" in body
+    assert "--reader-section-opacity: 0.7" in body
 
 
 def test_focus_mode_accepts_true_and_false_strings(client: TestClient, session: Session) -> None:
@@ -637,7 +637,7 @@ def test_focus_mode_persists_across_requests(client: TestClient, session: Sessio
     client.post("/preferences/focus_mode_enabled", data={"value": "true"})
     body = client.get(f"/read/{passage.id}").text
 
-    assert "--reader-section-opacity: 0.4" in body
+    assert "--reader-section-opacity: 0.7" in body
 
 
 def test_focus_mode_renders_sidebar_toggle(client: TestClient, session: Session) -> None:
