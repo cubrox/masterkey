@@ -84,7 +84,8 @@
   {#
     READ-P2-2 (#168): focus mode. Marks the passage section currently centered
     in the viewport with `.focus-active`; style.css dims the others to
-    --reader-section-opacity (0.4 when focus mode is on, 1 when off).
+    --reader-section-opacity (0.7 when focus mode is on, 1 when off; 0.7 is the
+    WCAG-AA floor — see the rationale in static/style.css).
 
     Design notes:
       - IntersectionObserver, NOT a scroll listener. The observer fires only
