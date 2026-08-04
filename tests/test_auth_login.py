@@ -233,3 +233,65 @@ def test_local_rate_limit_renders_fragment_with_retry_after(client: TestClient) 
     assert "Retry-After" in last.headers
     # Enumeration / leak guard: the rate-limited email must not appear.
     assert email not in body
+
+
+# ---------------------------------------------------------------------------
+# Observability — the /login 502 cause is logged (motivated by the SMTP-535
+# production outage on 2026-08-03, which the app had swallowed silently)
+# ---------------------------------------------------------------------------
+
+
+def test_supabase_502_logs_error_code_and_message(
+    client: TestClient, supabase_mock: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A non-rate-limit Supabase error must land a warning in the logs with
+    the code/status/message, so operators see the cause in Cloud Logging
+    instead of having to open the Supabase dashboard."""
+    from supabase_auth.errors import AuthApiError
+
+    supabase_mock.auth.sign_in_with_otp.side_effect = AuthApiError(
+        "Error sending magic link email: 535 authentication credentials invalid",
+        500,
+        "unexpected_failure",
+    )
+    with caplog.at_level("WARNING", logger="app.api.auth"):
+        response = client.post("/login", data={"email": "reader@example.com"})
+
+    assert response.status_code == 502
+    record = next((r for r in caplog.records if "login.supabase_error" in r.getMessage()), None)
+    assert record is not None, "expected a login.supabase_error warning"
+    msg = record.getMessage()
+    assert "unexpected_failure" in msg
+    assert "535" in msg  # the actual SMTP failure reason is visible
+
+
+def test_unexpected_502_logs_with_traceback(
+    client: TestClient, supabase_mock: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A non-AuthApiError failure (network, code bug) logs at ERROR with the
+    traceback so the class is spottable in Cloud Logging."""
+    supabase_mock.auth.sign_in_with_otp.side_effect = RuntimeError("supabase down")
+    with caplog.at_level("WARNING", logger="app.api.auth"):
+        response = client.post("/login", data={"email": "reader@example.com"})
+
+    assert response.status_code == 502
+    record = next((r for r in caplog.records if "login.unexpected_error" in r.getMessage()), None)
+    assert record is not None
+    assert record.exc_info is not None  # logger.exception captured the traceback
+
+
+def test_login_502_log_does_not_leak_the_email(
+    client: TestClient, supabase_mock: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """PII guard: the raw submitted email must never appear in the logs
+    (mirrors the enumeration guard the response already honors)."""
+    from supabase_auth.errors import AuthApiError
+
+    secret_email = "very.identifiable.person@example.com"
+    supabase_mock.auth.sign_in_with_otp.side_effect = AuthApiError(
+        "smtp failure", 500, "unexpected_failure"
+    )
+    with caplog.at_level("WARNING", logger="app.api.auth"):
+        client.post("/login", data={"email": secret_email})
+
+    assert secret_email not in caplog.text
