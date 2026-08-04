@@ -24,6 +24,7 @@ The legacy `User` SQLModel is still alive — see the transitional
 shim in `app/services/identity/session.py`. SUPA-2b (#87) removes it.
 """
 
+import logging
 from typing import Annotated
 
 from email_validator import EmailNotValidError, validate_email
@@ -39,6 +40,8 @@ from app.integrations.supabase.client import anon_client
 from app.services.rate_limit import check_login_rate_limit
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -193,6 +196,7 @@ def login(
         # guard: we don't echo Supabase's message verbatim for non-rate-
         # limit errors (which can leak whether an email is known).
         if exc.code in RATE_LIMIT_CODES:
+            logger.warning("login.supabase_rate_limited code=%s status=%s", exc.code, exc.status)
             # Supabase's shared-SMTP-pool default is 30 emails per project
             # per hour. AuthApiError does not surface Supabase's actual
             # Retry-After (checked upstream: only message/status/code).
@@ -209,6 +213,19 @@ def login(
                 status_code=429,
                 headers={"Retry-After": "900"},
             )
+        # Non-rate-limit Supabase error -> 502. Log the code/status/message so
+        # the cause is in Cloud Logging instead of only the Supabase dashboard.
+        # This is server-side observability, not echoed to the client, so it
+        # doesn't touch the enumeration guard — and Supabase send-failure
+        # messages (e.g. the SMTP 535 that took down sign-in on 2026-08-03,
+        # #246) describe infrastructure, not which emails exist. No raw user
+        # email is logged.
+        logger.warning(
+            "login.supabase_error code=%s status=%s message=%s",
+            exc.code,
+            exc.status,
+            exc.message,
+        )
         return HTMLResponse(
             content=signin_form_fragment(
                 "Sign-in is temporarily unavailable. Please try again in a moment."
@@ -216,8 +233,10 @@ def login(
             status_code=502,
         )
     except Exception:
-        # Non-Supabase failure (network, config, code bug). Same 502 as
-        # before so operators can spot the class from Cloud Logging.
+        # Non-Supabase failure (network, config, code bug). Log with the
+        # traceback so operators can spot the class from Cloud Logging (the
+        # comment here used to claim this happened — now it actually does).
+        logger.exception("login.unexpected_error")
         return HTMLResponse(
             content=signin_form_fragment(
                 "Sign-in is temporarily unavailable. Please try again in a moment."
