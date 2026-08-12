@@ -48,4 +48,34 @@
       <button type="submit">Upload and read</button>
     </form>
   </article>
+
+  {# PRESET-3 (#281): pick a curated message instead of pasting. Read-only
+     listing; selecting one is PRESET-4's POST /passages/from-preset/{id}.
+     Renders a clean placeholder while the corpus is empty (pre PRESET-2). #}
+  <article aria-labelledby="preset-heading">
+    <header><strong id="preset-heading">Start from a message</strong></header>
+    {% if presets %}
+      <p>Pick a message to read — no need to paste anything.</p>
+      <ul class="preset-list">
+        {% for preset in presets %}
+          <li class="preset-item">
+            <div class="preset-meta">
+              <strong>{{ preset.title }}</strong>
+              <small>
+                {% if preset.author %}{{ preset.author }} · {% endif %}
+                {{ preset.copyright_holder }}{% if preset.source_date %} ·
+                {{ preset.source_date.year }}{% endif %}
+              </small>
+            </div>
+            <form action="/passages/from-preset/{{ preset.id }}" method="post">
+              <button type="submit" aria-label="Read {{ preset.title }}">Read this</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No preset messages are available yet — paste your own text or upload a
+         PDF above to start reading.</p>
+    {% endif %}
+  </article>
 {% endblock %}
