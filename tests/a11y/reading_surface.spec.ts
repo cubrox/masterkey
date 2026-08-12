@@ -21,9 +21,16 @@ import { seedAndLogin, type Variant } from "./fixtures/seed";
  *   - high-contrast → dark bg + light fg (dark-mode users)
  *   - large-text   → 28px font (low-vision users)
  *   - bionic       → bionic_enabled=true (the bionicize transform)
+ *   - preset       → preset-sourced passage w/ attribution block (#282)
  */
 
-const VARIANTS: Variant[] = ["default", "high-contrast", "large-text", "bionic"];
+const VARIANTS: Variant[] = [
+  "default",
+  "high-contrast",
+  "large-text",
+  "bionic",
+  "preset",
+];
 
 for (const variant of VARIANTS) {
   test(`reading surface a11y: ${variant}`, async ({ page, context, request }) => {
