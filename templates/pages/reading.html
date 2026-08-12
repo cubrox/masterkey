@@ -41,6 +41,26 @@
 
   {% include "fragments/reading_surface.html" %}
 
+  {# PRESET-4 (#282): attribution for preset-sourced passages. Rendered
+     unconditionally whenever present — it is the licensing condition for
+     using this text, NOT a user preference, so there is no toggle. Absent
+     (NULL) for paste/pdf passages, so nothing renders for those. #}
+  {% if passage.attribution_copyright %}
+    <footer class="passage-attribution">
+      {% if passage.attribution_title %}
+        <p class="attribution-title">{{ passage.attribution_title }}</p>
+      {% endif %}
+      <p class="attribution-credit">
+        {% if passage.attribution_author %}{{ passage.attribution_author }}. {% endif %}
+        Copyright &copy; {{ passage.attribution_copyright }}.
+        {% if passage.attribution_source_url %}
+          <a href="{{ passage.attribution_source_url }}"
+             rel="noopener noreferrer" target="_blank">Source</a>.
+        {% endif %}
+      </p>
+    </footer>
+  {% endif %}
+
   {% include "fragments/comprehension.html" %}
 
   {#

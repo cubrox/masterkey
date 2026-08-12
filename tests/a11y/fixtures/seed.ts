@@ -1,6 +1,11 @@
 import type { APIRequestContext, BrowserContext } from "@playwright/test";
 
-export type Variant = "default" | "high-contrast" | "large-text" | "bionic";
+export type Variant =
+  | "default"
+  | "high-contrast"
+  | "large-text"
+  | "bionic"
+  | "preset";
 
 export interface SeedResult {
   passageId: string;
