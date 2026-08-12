@@ -20,11 +20,12 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from app.db import get_session
 from app.integrations.supabase.auth import current_user
 from app.models.passage import Passage
+from app.models.preset_passage import PresetPassage
 from app.services.ingestion.pdf import EmptyPdfTextError, PdfParseError, extract_text
 from app.services.ingestion.split import MAX_PARTS, split_into_parts
 from app.templates import templates
@@ -100,12 +101,25 @@ def _persist_as_passages(
 
 
 @router.get("/passages/new", response_class=HTMLResponse)
-def new_passage_form(request: Request, user: CurrentUser) -> HTMLResponse:
-    """Render the paste-text form."""
+def new_passage_form(request: Request, user: CurrentUser, session: SessionDep) -> HTMLResponse:
+    """Render the passage-input page: paste, PDF upload, and the preset picker.
+
+    PRESET-3 (#281): lists the active curated presets so a reader can start
+    from a message instead of pasting. Read-only here — selecting one is
+    handled by PRESET-4's `POST /passages/from-preset/{id}`. Ordered by
+    `sort_order` then `created_at` for a stable listing; inactive presets are
+    excluded. Empty (the current state until PRESET-2 seeds the corpus) renders
+    a clean placeholder.
+    """
+    presets = session.exec(
+        select(PresetPassage)
+        .where(col(PresetPassage.is_active))
+        .order_by(col(PresetPassage.sort_order), col(PresetPassage.created_at))
+    ).all()
     return templates.TemplateResponse(
         request=request,
         name="pages/passages_new.html",
-        context={"user": user},
+        context={"user": user, "presets": presets},
     )
 
 
