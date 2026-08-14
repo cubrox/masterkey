@@ -19,6 +19,11 @@ that hits the *real* deployed URL with a *real* Supabase session can.
    Supabase stack in CI — so the token is byte-for-byte what `/auth/callback`
    produces for a genuine magic-link sign-in.
 2. Hit the live app over HTTP:
+   - `POST /login` with the throwaway user's email → expect 202 (#291). This
+     is the email SEND path: a broken/misconfigured mailer (e.g. an SMTP 535
+     auth failure) surfaces as a 502 here. The rest of the flow mints sessions
+     server-side and never sends email, so without this a total email outage
+     stays green — as it did during the 2026-08 SMTP outage.
    - `GET /auth/callback?access_token=…&refresh_token=…` → expect a 303 to
      `/passages/new` with an `sb-access-token` cookie set.
    - `GET /passages/new` (cookie attached) → expect 200 + the authed page.
@@ -37,10 +42,11 @@ that hits the *real* deployed URL with a *real* Supabase session can.
 
 ## What it deliberately does NOT cover
 
-- **Supabase's own email-link generation.** We mint the session server-side
-  rather than clicking a real emailed link. POST /login → `sign_in_with_otp`
-  is unit-tested separately; this monitor is about our token-validation,
-  session, and logout contract against the live deploy.
+- **Email delivery / clicking the real link.** We verify that `POST /login`
+  is ACCEPTED (Supabase handed the message to the mailer → 202), which catches
+  mailer-auth outages, but we don't read an inbox or click the emailed link —
+  no mailbox to poll. Delivery failures (bad recipient, spam) are out of scope;
+  the session flow below mints the token server-side.
 - **The browser-side JS hash extractor** (`/auth/callback` stage 1). That moves
   the token from the URL fragment into query params *in a real browser*; a
   headless HTTP client has the token already, so it calls stage 2 directly. The
@@ -124,6 +130,48 @@ def _cookie_header_clears(set_cookie_values: list[str]) -> bool:
         if token == "" or "max-age=0" in lowered or "expires=thu, 01 jan 1970" in lowered:
             return True
     return False
+
+
+def _login_send_outcome(status_code: int) -> str:
+    """Classify a POST /login response for the email-send check (#291).
+
+    Returns "ok" (202 — Supabase accepted the send) or "rate_limited" (429 —
+    our 10/hr limiter or Supabase's shared pool; a soft, self-clearing state,
+    NOT an outage). Any other status raises: a broken email sender surfaces as
+    a 502 here (e.g. an SMTP 535 auth failure), which is exactly the outage
+    class the rest of this monitor is blind to.
+    """
+    if status_code == 202:
+        return "ok"
+    if status_code == 429:
+        return "rate_limited"
+    raise SmokeFailure(
+        f"POST /login returned {status_code}, expected 202 — the email SEND path is broken "
+        "(a broken/misconfigured mailer, e.g. SMTP 535, surfaces here as 502; see #291)"
+    )
+
+
+def check_login_send(base_url: str, email: str) -> None:
+    """Exercise POST /login — the magic-link SEND path — and require a 202.
+
+    This is the layer a broken email sender takes down (`sign_in_with_otp`
+    fails → /login 502). The rest of this monitor mints sessions server-side
+    and never touches email, so without this a total email outage stays green
+    (it did, 2026-08 SMTP 535). We check only that Supabase ACCEPTED the send —
+    no inbox, we do not click the emailed link.
+
+    Uses the existing throwaway user's email (already created + confirmed via
+    admin API), so a disabled-signups setting doesn't reject it. A 429 is
+    logged and treated as pass — rate-limiting is not an outage.
+    """
+    base = base_url.rstrip("/")
+    with httpx.Client(timeout=HTTP_TIMEOUT_SECONDS, follow_redirects=False) as client:
+        resp = client.post(f"{base}/login", data={"email": email}, headers={"HX-Request": "true"})
+    if _login_send_outcome(resp.status_code) == "rate_limited":
+        print(
+            "WARN: POST /login rate-limited (429) — treating as pass, not an outage",
+            flush=True,
+        )
 
 
 def create_throwaway_user(service: Client) -> tuple[str, str, str]:
@@ -287,6 +335,10 @@ def main() -> int:
     try:
         user_id, email, password = create_throwaway_user(service_client)
         _step(f"created throwaway user {user_id}")
+        # Email SEND path (#291): the one layer a broken mailer takes down. Run
+        # it before the session flow so an SMTP outage is the first thing named.
+        _step("POST /login — email send path, expect 202 (#291)")
+        check_login_send(base_url, email)
         access_token, refresh_token = sign_in(anon, email, password)
         _step("minted session via password grant")
         run_flow(base_url, access_token, refresh_token)
@@ -310,7 +362,7 @@ def main() -> int:
                 print(f"WARN: failed to delete throwaway user {user_id}: {exc}", flush=True)
 
     print(
-        "PASS: session → authed page → reload → paste → read → logout all verified",
+        "PASS: login-send → session → authed page → reload → paste → read → logout all verified",
         flush=True,
     )
     return 0
