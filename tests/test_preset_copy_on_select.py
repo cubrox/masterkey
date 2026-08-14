@@ -125,3 +125,70 @@ def test_from_preset_requires_auth(client: TestClient, session: Session) -> None
     assert response.status_code in (302, 303)
     assert response.headers["location"] == "/"
     assert session.exec(select(Passage)).all() == []
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups (#282 review)
+# ---------------------------------------------------------------------------
+
+
+def test_split_preset_carries_attribution_on_later_parts(
+    client: TestClient, session: Session
+) -> None:
+    """A preset longer than MAX_TEXT_LEN splits into linked parts. Every part —
+    not just part 0 — must carry the attribution, so the reading surface shows
+    the copyright on whichever page the reader is on."""
+    from app.api.passages import MAX_TEXT_LEN
+
+    long_text = ("Consider the words of justice and mercy. " * 5000)[: MAX_TEXT_LEN + 20_000]
+    assert len(long_text) > MAX_TEXT_LEN  # guard: actually triggers a split
+    preset = _add_preset(session, text=long_text)
+
+    signed_in(session)
+    client.post(f"/passages/from-preset/{preset.id}", follow_redirects=False)
+
+    parts = session.exec(select(Passage).order_by(Passage.part_index)).all()  # type: ignore[arg-type]
+    assert len(parts) > 1, "expected the long preset to split into multiple parts"
+    # Every part carries the attribution, and they share one document_id.
+    assert all(p.attribution_copyright == "Bahá'í International Community" for p in parts)
+    assert all(p.attribution_author == "Bahá'u'lláh" for p in parts)
+    later = next(p for p in parts if p.part_index >= 1)
+    assert later.attribution_title == "The Hidden Words"
+
+
+def test_source_link_only_rendered_for_https(client: TestClient, session: Session) -> None:
+    """The Source link renders only for an https URL; a non-https scheme is
+    dropped (defensive), but the copyright/author still render."""
+    user = signed_in(session)
+
+    def _preset_passage(url: str) -> Passage:
+        # Text must NOT contain the url, else it appears in the body regardless
+        # of the link — the assertions below are about the rendered link only.
+        text = f"passage body for {url[:4]}"
+        p = Passage(
+            owner_id=user.id,
+            text=text,
+            text_hash=hashlib.sha256(text.encode()).digest(),
+            source_type="preset",
+            attribution_title="T",
+            attribution_author="A",
+            attribution_copyright="Bahá'í International Community",
+            attribution_source_url=url,
+        )
+        session.add(p)
+        session.commit()
+        session.refresh(p)
+        return p
+
+    https_p = _preset_passage("https://www.bahai.org/x")
+    http_p = _preset_passage("http://insecure.example.com/x")
+
+    https_body = client.get(f"/read/{https_p.id}").text
+    assert ">Source</a>" in https_body
+    assert "https://www.bahai.org/x" in https_body
+
+    http_body = client.get(f"/read/{http_p.id}").text
+    assert ">Source</a>" not in http_body  # link dropped for non-https
+    assert "insecure.example.com" not in http_body
+    # ...but the copyright still renders — attribution is not gated on the link.
+    assert "Copyright" in http_body and "International Community" in http_body
