@@ -5,6 +5,7 @@ export type Variant =
   | "high-contrast"
   | "large-text"
   | "bionic"
+  | "focus-mode"
   | "preset";
 
 export interface SeedResult {
