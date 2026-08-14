@@ -101,3 +101,50 @@ def test_no_delete_when_user_creation_fails(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert smoke.main() == 1
     service_fake.auth.admin.delete_user.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# #291 — POST /login email-send check classifies statuses correctly
+# ---------------------------------------------------------------------------
+
+
+def test_login_send_202_is_ok() -> None:
+    assert smoke._login_send_outcome(202) == "ok"
+
+
+def test_login_send_429_is_soft_rate_limited() -> None:
+    """A rate limit is self-clearing, not an outage — must not fail the run."""
+    assert smoke._login_send_outcome(429) == "rate_limited"
+
+
+@pytest.mark.parametrize("status", [502, 500, 400, 422, 503])
+def test_login_send_other_statuses_raise(status: int) -> None:
+    """502 (broken mailer, e.g. SMTP 535) and any other non-202/429 status
+    must raise so the monitor fails and pages."""
+    with pytest.raises(smoke.SmokeFailure):
+        smoke._login_send_outcome(status)
+
+
+def test_login_send_failure_fails_run_and_cleans_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An email-send outage (POST /login → 502) must fail the monitor (exit 1)
+    AND still delete the throwaway user — the outage this check exists to catch
+    must not also leak a user."""
+    _set_required_env(monkeypatch)
+
+    service_fake = MagicMock()
+    service_fake.auth.admin.create_user.return_value = SimpleNamespace(
+        user=SimpleNamespace(id="user-xyz")
+    )
+    anon_fake = MagicMock()
+    monkeypatch.setattr(smoke, "create_client", MagicMock(side_effect=[service_fake, anon_fake]))
+    # Simulate the mailer being down: the send check raises before sign-in.
+    monkeypatch.setattr(
+        smoke,
+        "check_login_send",
+        MagicMock(side_effect=smoke.SmokeFailure("POST /login returned 502")),
+    )
+
+    assert smoke.main() == 1
+    service_fake.auth.admin.delete_user.assert_called_once_with("user-xyz")
+    # The session flow must not have run once the send check failed.
+    anon_fake.auth.sign_in_with_password.assert_not_called()
