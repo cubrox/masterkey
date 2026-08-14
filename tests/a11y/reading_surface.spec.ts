@@ -21,6 +21,7 @@ import { seedAndLogin, type Variant } from "./fixtures/seed";
  *   - high-contrast → dark bg + light fg (dark-mode users)
  *   - large-text   → 28px font (low-vision users)
  *   - bionic       → bionic_enabled=true (the bionicize transform)
+ *   - focus-mode   → focus_mode_enabled=true (dimmed non-active sections)
  *   - preset       → preset-sourced passage w/ attribution block (#282)
  */
 
@@ -29,6 +30,7 @@ const VARIANTS: Variant[] = [
   "high-contrast",
   "large-text",
   "bionic",
+  "focus-mode",
   "preset",
 ];
 
