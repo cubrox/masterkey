@@ -53,7 +53,11 @@
       <p class="attribution-credit">
         {% if passage.attribution_author %}{{ passage.attribution_author }}. {% endif %}
         Copyright &copy; {{ passage.attribution_copyright }}.
-        {% if passage.attribution_source_url %}
+        {# Only render the Source link for an https URL — defends against a
+           non-https or `javascript:` scheme ever reaching href, even though
+           preset data is service-role-seeded. The copyright/author above
+           always render regardless. #}
+        {% if passage.attribution_source_url and passage.attribution_source_url.startswith("https://") %}
           <a href="{{ passage.attribution_source_url }}"
              rel="noopener noreferrer" target="_blank">Source</a>.
         {% endif %}
