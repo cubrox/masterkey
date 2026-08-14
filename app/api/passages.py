@@ -20,11 +20,12 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from app.db import get_session
 from app.integrations.supabase.auth import current_user
 from app.models.passage import Passage
+from app.models.preset_passage import PresetPassage
 from app.services.ingestion.pdf import EmptyPdfTextError, PdfParseError, extract_text
 from app.services.ingestion.split import MAX_PARTS, split_into_parts
 from app.templates import templates
@@ -56,6 +57,10 @@ def _persist_as_passages(
     text: str,
     source_type: str,
     source_filename: str | None,
+    attribution_title: str | None = None,
+    attribution_author: str | None = None,
+    attribution_copyright: str | None = None,
+    attribution_source_url: str | None = None,
 ) -> Passage:
     """Persist `text` as one passage, or — if it's over MAX_TEXT_LEN — as an
     ordered set of linked parts (INGEST-3 #145). Returns the FIRST passage
@@ -64,6 +69,10 @@ def _persist_as_passages(
     Text within the cap stays a standalone passage (document_id=None) exactly
     as before. Over the cap, it's split into <= MAX_TEXT_LEN-render-safe parts
     that share one document_id; the reading view links them with Prev/Next.
+
+    PRESET-4 (#282): the `attribution_*` args carry a preset's copyright/author
+    onto EVERY part, so each page of a split preset renders the required
+    attribution. They default to None for paste/pdf, which store no attribution.
     """
     if len(text) <= MAX_TEXT_LEN:
         parts = [text]
@@ -89,6 +98,10 @@ def _persist_as_passages(
             document_id=document_id,
             part_index=index,
             part_count=part_count,
+            attribution_title=attribution_title,
+            attribution_author=attribution_author,
+            attribution_copyright=attribution_copyright,
+            attribution_source_url=attribution_source_url,
         )
         session.add(passage)
         if index == 0:
@@ -100,13 +113,60 @@ def _persist_as_passages(
 
 
 @router.get("/passages/new", response_class=HTMLResponse)
-def new_passage_form(request: Request, user: CurrentUser) -> HTMLResponse:
-    """Render the paste-text form."""
+def new_passage_form(request: Request, user: CurrentUser, session: SessionDep) -> HTMLResponse:
+    """Render the passage-input page: paste, PDF upload, and the preset picker.
+
+    PRESET-3 (#281): lists the active curated presets so a reader can start
+    from a message instead of pasting. Read-only here — selecting one is
+    handled by PRESET-4's `POST /passages/from-preset/{id}`. Ordered by
+    `sort_order` then `created_at` for a stable listing; inactive presets are
+    excluded. Empty (the current state until PRESET-2 seeds the corpus) renders
+    a clean placeholder.
+    """
+    presets = session.exec(
+        select(PresetPassage)
+        .where(col(PresetPassage.is_active))
+        .order_by(col(PresetPassage.sort_order), col(PresetPassage.created_at))
+    ).all()
     return templates.TemplateResponse(
         request=request,
         name="pages/passages_new.html",
-        context={"user": user},
+        context={"user": user, "presets": presets},
     )
+
+
+@router.post("/passages/from-preset/{preset_id}")
+def create_passage_from_preset(
+    preset_id: uuid.UUID,
+    user: CurrentUser,
+    session: SessionDep,
+) -> RedirectResponse:
+    """Create a user-owned passage from a curated preset, then open it.
+
+    PRESET-4 (#282): copy-on-select. Reuses `_persist_as_passages` (so hashing,
+    comprehension-cache sharing, and part-splitting all come for free) with
+    `source_type='preset'`, copying the preset's attribution onto the new
+    passage(s) so the reading surface renders the required copyright/author.
+
+    An unknown or inactive preset returns 404 with the same shape as GET /read
+    — it doesn't leak which ids exist.
+    """
+    preset = session.get(PresetPassage, preset_id)
+    if preset is None or not preset.is_active:
+        raise HTTPException(status_code=404, detail="Preset not found")
+
+    first = _persist_as_passages(
+        session=session,
+        owner_id=user.id,
+        text=preset.text,
+        source_type="preset",
+        source_filename=None,
+        attribution_title=preset.title,
+        attribution_author=preset.author,
+        attribution_copyright=preset.copyright_holder,
+        attribution_source_url=preset.source_url,
+    )
+    return RedirectResponse(url=f"/read/{first.id}", status_code=303)
 
 
 @router.post("/passages")

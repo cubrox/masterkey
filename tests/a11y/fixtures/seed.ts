@@ -5,7 +5,8 @@ export type Variant =
   | "high-contrast"
   | "large-text"
   | "bionic"
-  | "focus-mode";
+  | "focus-mode"
+  | "preset";
 
 export interface SeedResult {
   passageId: string;

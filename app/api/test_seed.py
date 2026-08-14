@@ -78,7 +78,7 @@ router = APIRouter()
 SessionDep = Annotated[Session, Depends(get_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
-Variant = Literal["default", "high-contrast", "large-text", "bionic", "focus-mode"]
+Variant = Literal["default", "high-contrast", "large-text", "bionic", "focus-mode", "preset"]
 
 # Representative passage with multiple paragraphs so axe-core has a
 # real surface to analyze — headings, paragraph spacing, line wrap,
@@ -129,6 +129,9 @@ _PREFS_FOR_VARIANT: dict[str, dict[str, Any]] = {
     # READ-P2-2 (#168): dimmed sections are the a11y-relevant part of
     # focus mode — this variant lets axe scan the surface with dimming on.
     "focus-mode": {"focus_mode_enabled": True},
+    # PRESET-4 (#282): no preference overrides — this variant is about the
+    # attribution block set on the seeded passage above, so axe can scan it.
+    "preset": {},
 }
 
 
@@ -178,6 +181,9 @@ def seed_passage_and_login(
     access_token: str = auth_resp.session.access_token
     user_id = uuid.UUID(str(auth_resp.user.id))
 
+    # PRESET-4 (#282): the `preset` variant seeds a preset-sourced passage with
+    # attribution so axe scans the copyright/author block on the reading surface.
+    is_preset = variant == "preset"
     passage = Passage(
         owner_id=user_id,
         # Placeholder hash — the read path doesn't validate it. Note the
@@ -186,8 +192,12 @@ def seed_passage_and_login(
         # directly rather than reusing this value.
         text_hash=b"\x00" * 32,
         text=SEED_PASSAGE_TEXT,
-        source_type="paste",
+        source_type="preset" if is_preset else "paste",
         source_filename=None,
+        attribution_title="The Hidden Words" if is_preset else None,
+        attribution_author="Bahá'u'lláh" if is_preset else None,
+        attribution_copyright="Bahá'í International Community" if is_preset else None,
+        attribution_source_url="https://www.bahai.org/library/" if is_preset else None,
     )
     session.add(passage)
 
